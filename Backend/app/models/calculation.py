@@ -34,8 +34,10 @@ class CheckRebalancing(BaseModel):
 class SIPRequest(BaseModel):
     target_corpus: float
     pre_ret_return: float
-    annual_step_up_percent: float
+    inflation_rate: float
+    income_raise_pct: float
     years_to_goal: int
+    annual_step_up_percent: float = None  # Deprecated: use inflation_rate and income_raise_pct
 
 class GlidePathRequest(BaseModel):
     current_age: int

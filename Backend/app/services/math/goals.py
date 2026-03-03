@@ -1,5 +1,14 @@
 from typing import Optional
 from app.models.user import Retirement, BucketAllocation
+import os
+from openai import OpenAI
+import datetime
+import json
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 
 def check_feasibility_retirement(r: Retirement, additional_monthly_sip: float) -> dict:
     """
@@ -398,3 +407,179 @@ def get_retirement_plan(r: Retirement) -> dict:
         "glide_path":  glide_path,   # pre-retirement  — accumulation roadmap
         "buckets":     buckets       # post-retirement — drawdown structure
     }
+
+
+def format_inr(value: float) -> str:
+    """
+    Formats a float into Indian number system string.
+    e.g. 120588890.81 → '₹12,05,88,890.81' (12 crore, 5 lakh, 88 thousand, 890.81)
+    """
+    is_negative = value < 0
+    value = abs(value)
+    
+    # Split integer and decimal parts
+    integer_part = int(value)
+    decimal_part = round(value - integer_part, 2)
+    decimal_str = f"{decimal_part:.2f}".split(".")[1]
+    
+    # Indian grouping: last 3 digits, then groups of 2
+    s = str(integer_part)
+    if len(s) <= 3:
+        formatted = s
+    else:
+        # Last 3 digits
+        last3 = s[-3:]
+        remaining = s[:-3]
+        # Group remaining in pairs from right
+        groups = []
+        while len(remaining) > 2:
+            groups.append(remaining[-2:])
+            remaining = remaining[:-2]
+        if remaining:
+            groups.append(remaining)
+        groups.reverse()
+        formatted = ",".join(groups) + "," + last3
+
+    result = f"₹{formatted}.{decimal_str}"
+    return f"-{result}" if is_negative else result
+
+
+def build_ai_payload(plan: dict) -> dict:
+    """
+    Builds a pre-formatted payload for the AI model with properly formatted INR values.
+    The AI will copy these formatted strings directly without reformatting.
+    """
+    corpus = plan["corpus"]
+    buckets = plan["buckets"]["buckets"]
+    glide_path = plan["glide_path"]
+    
+    # Extract user profile from available data
+    first_year = glide_path["yearly_schedule"][0] if glide_path.get("yearly_schedule") else {}
+    user_profile = {
+        "age": first_year.get("age", "N/A"),
+        "retirement_age": glide_path.get("retirement_age", "N/A"),
+        "life_expectancy": plan.get("buckets", {}).get("review_age", 0) + 
+                          plan.get("buckets", {}).get("retirement_duration_years", 0),
+    }
+
+    return {
+        "user_profile": user_profile,
+        "plan_summary": {
+            # Pre-formatted — model copies exactly, never reformats
+            "corpus_required":                 format_inr(corpus["corpus_required"]),
+            "annual_expense_at_retirement":    format_inr(corpus["annual_expense_at_retirement"]),
+            "income_at_retirement":            format_inr(corpus["income_at_retirement"]),
+            "net_annual_withdrawal":           format_inr(corpus["net_annual_withdrawal"]),
+            "fv_existing_corpus":              format_inr(corpus["fv_existing_corpus"]),
+            "fv_existing_sip":                 format_inr(corpus["fv_existing_sip"]),
+            "corpus_gap":                      format_inr(corpus["corpus_gap"]),
+            "additional_monthly_sip_required": format_inr(corpus["additional_monthly_sip_required"]),
+            "sip_stepup_rate_pct":             f"{glide_path.get('sip_stepup_rate_pct', 0):.2f}%",
+        },
+        "glide_path_summary":  glide_path.get("allocation_bands", []),
+        "yearly_sip_schedule": [
+            {
+                **item,
+                "monthly_sip": format_inr(item["monthly_sip"]),
+                "sip_to_equity": format_inr(item["sip_to_equity"]),
+                "sip_to_debt": format_inr(item["sip_to_debt"])
+            }
+            for item in glide_path.get("yearly_schedule", [])
+        ],
+        "bucket_summary": {
+            "bucket_1_size": format_inr(buckets["bucket_1"]["size"]),
+            "bucket_1_equity": format_inr(buckets["bucket_1"]["equity_amount"]),
+            "bucket_1_debt": format_inr(buckets["bucket_1"]["debt_amount"]),
+            "bucket_2_size": format_inr(buckets["bucket_2"]["size"]),
+            "bucket_2_equity": format_inr(buckets["bucket_2"]["equity_amount"]),
+            "bucket_2_debt": format_inr(buckets["bucket_2"]["debt_amount"]),
+            "bucket_3_size": format_inr(buckets["bucket_3"]["size"]),
+            "bucket_3_equity": format_inr(buckets["bucket_3"]["equity_amount"]),
+            "bucket_3_debt": format_inr(buckets["bucket_3"]["debt_amount"]),
+        }
+    }
+
+
+def explain_retirement_plan_with_ai(
+    retirement_plan: dict,
+    user_question: Optional[str] = None
+) -> str:
+    # Get HF token from environment
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        return "Error: HF_TOKEN not found in environment variables"
+    
+    # Remove quotes if present in the token
+    hf_token = hf_token.strip('"').strip("'")
+    
+    # Load prompts from file
+    prompt_file_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "retirement_agent_prompt.txt"
+    )
+    
+    try:
+        with open(prompt_file_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+    except FileNotFoundError:
+        return f"Error: System prompt file not found at {prompt_file_path}"
+    
+    # Parse SYSTEM_PROMPT and INITIAL_USER_PROMPT from file
+    try:
+        # Extract SYSTEM_PROMPT (everything between SYSTEM_PROMPT = """ and the next """)
+        system_start = file_content.find('SYSTEM_PROMPT = """') + len('SYSTEM_PROMPT = """')
+        system_end = file_content.find('"""', system_start)
+        system_prompt_template = file_content[system_start:system_end]
+        
+        # Extract INITIAL_USER_PROMPT
+        initial_start = file_content.find('INITIAL_USER_PROMPT = """') + len('INITIAL_USER_PROMPT = """')
+        initial_end = file_content.find('"""', initial_start)
+        initial_user_prompt = file_content[initial_start:initial_end]
+        
+    except Exception as e:
+        return f"Error parsing prompt file: {str(e)}"
+    
+    # Use the default comprehensive prompt if no specific question is provided
+    if user_question is None:
+        user_question = initial_user_prompt
+    
+    # Get current date
+    current_date = datetime.datetime.now().strftime("%B %d, %Y")
+    
+    # Build formatted payload with INR formatting
+    formatted_payload = build_ai_payload(retirement_plan)
+    plan_payload_json = json.dumps(formatted_payload, indent=2)
+    
+    system_prompt = system_prompt_template.format(
+        current_date=current_date,
+        plan_payload=plan_payload_json
+    )
+    
+    # Initialize OpenAI client with HuggingFace
+    try:
+        client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=hf_token,
+        )
+        
+        # Get AI explanation
+        completion = client.chat.completions.create(
+            model="MiniMaxAI/MiniMax-M2.5:novita",
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_question
+                }
+            ],
+            max_tokens=10000,
+            temperature=0.7
+        )
+        
+        return completion.choices[0].message.content
+    
+    except Exception as e:
+        return f"Error generating AI explanation: {str(e)}"

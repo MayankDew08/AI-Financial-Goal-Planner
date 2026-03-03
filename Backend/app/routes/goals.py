@@ -1,10 +1,16 @@
-from fastapi import APIRouter, Form
+from fastapi import APIRouter, Form, Body
 from app.models.user import Retirement
-from app.services.math.goals import get_retirement_plan
+from app.services.math.goals import get_retirement_plan, explain_retirement_plan_with_ai
 from typing import Optional
+from pydantic import BaseModel
 
 
 router = APIRouter(prefix="/goals", tags=["goals"])
+
+
+class ExplainRetirementRequest(BaseModel):
+    retirement_plan: dict
+    user_question: Optional[str] = None
 
 
 @router.post("/retirement")
@@ -50,3 +56,20 @@ def endpoint_retirement(
     )
     return get_retirement_plan(data)
 
+@router.post("/explain_retirement_plan")
+def endpoint_explain_retirement_plan(request: ExplainRetirementRequest):
+    """
+    Explains a retirement plan using AI in simple terms with properly formatted INR values.
+    
+    Send:
+    - retirement_plan: output from /retirement endpoint (includes user profile and assumptions)
+    - user_question: (optional) specific question about the plan
+    
+    If no question is provided, returns a comprehensive 4-section walkthrough.
+    """
+    return {
+        "explanation": explain_retirement_plan_with_ai(
+            request.retirement_plan,
+            request.user_question
+        )
+    }

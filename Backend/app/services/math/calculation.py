@@ -98,79 +98,27 @@ def check_rebalancing(data: CheckRebalancing):
 
 def calculate_sip(data: SIPRequest):
     """
-    Calculates the initial monthly investment needed with step-up.
-    Formula:
-    SIP = (Target * (r - g)) / (((1+r)^n - (1+g)^n) * (1+r))
-    Where r = monthly return, g = monthly step-up equivalent? 
-    Wait, the user prompt says:
-    Starting Monthly SIP = (Target * (r - g)) / ( ((1+r)^N - (1+g)^N) * (1+r) )
-    BUT standard step-up is usually annual.
-    Let's check the user provided formula carefully:
-    P = (Target * (r - g)) / ( ((1+r)^N - (1+g)^N) * (1+r) )
-    Where:
-    r = expected annual return (decimal) ? No, usually these formulas mirror the compounding frequency.
-    g = annual step-up percentage (decimal)
-    N = years to goal ??
-    
-    Let's re-read the prompt:
-    "r is the expected annual return, g is the annual step-up percentage, and N is the years to goal"
-    "This formula solves for the first year's monthly contribution. In your code loop, you must multiply PMT by (1+g) every 12 months."
-    
-    The formula provided in the prompt is:
-    PMT = ( Target * (r - g) ) / ( ((1+r)^N - (1+g)^N) * (1+r) )
-    
-    This looks like a formula derived for annual compounding/contributions. 
-    However, SIP is monthly.
-    Usually, for monthly SIP with annual step-up, the calculation is more complex or an approximation is used.
-    
-    BUT, the prompt specifically gave me THIS formula to use.
-    It says "Starting Monthly Investment (PMT)".
-    And "In your code loop...". This implies this PMT is indeed the monthly amount for year 1.
-    
-    Let's adhere STRICTLY to the provided formula.
-    r = data.pre_ret_return / 100
-    g = data.annual_step_up_percent / 100
-    N = data.years_to_goal
+    Calculates initial monthly SIP with step-up adjusted for inflation and salary hike.
+    Step-up rate derived: g = ((1 + income_raise_pct) / (1 + inflation_rate)) - 1
+    Formula: PMT = (Target * (r - g)) / (((1+r)^N - (1+g)^N) * (1+r))
     """
     target_corpus = data.target_corpus
     r = data.pre_ret_return / 100
-    g = data.annual_step_up_percent / 100
+    inflation_rate = data.inflation_rate / 100
+    income_raise_pct = data.income_raise_pct / 100
     n_years = data.years_to_goal
 
-    # Handle edge case where r == g
-    if r == g:
-        # If return equals step-up, the formula (r-g) becomes 0.
-        # This is a specific limit case.
-        # For geometric series sum a + ar + ar^2 ... if r=1 (growth matches return), sum is N * a.
-        # But here it's more complex.
-        # Let's assume for now valid inputs where r != g.
-        # If strict adherence is required, I might need to handle div by zero.
-        # Let's add a small epsilon or handle it.
-        # Actually, if r=g, the denominator is 0 too. L'Hopital's rule applies.
-        # Approximation: PMT = Target / (N * 12 * (1+r)^N ) ? No.
-        # simple logic: if growth matches return, real return is 0 relative to step up?
-        # Let's stick to valid inputs or add a tiny delta if they are equal to avoid crash.
-        if abs(r - g) < 1e-9:
-            g += 1e-9
+    # Derive real step-up rate from income growth adjusted for inflation
+    g = ((1 + income_raise_pct) / (1 + inflation_rate)) - 1
+    
+    # Prevent division by zero if r ≈ g
+    if abs(r - g) < 1e-9:
+        g += 1e-9
 
     numerator = target_corpus * (r - g)
     denominator = (((1 + r) ** n_years) - ((1 + g) ** n_years)) * (1 + r)
     
     starting_sip = (numerator / denominator) / 12
-    
-    # Just to be safe, since standard Step-up SIP formula often divides by 12 for monthly.
-    # The prompt formula: P = (Target * (r-g)) / ...
-    # This P is likely the ANNUAL contribution needed in year 1.
-    # "Starting Monthly Investment (PMT)" label in prompt might be misleading if the formula is for annual.
-    # Let's look at the terms: r is annual return. g is annual step up. N is years.
-    # If P comes out as 120,000, and we need monthly, we might need to divide by 12.
-    # HOWEVER, the prompt says "solves for the first year's monthly contribution".
-    # I will assume the formula results in the MONTHLY amount directly as per prompt text.
-    # Wait, check derived formulas for geometric progression of annuities.
-    # FV = P * 12 * ( ... ) if P is monthly?
-    # Let's assume the prompt is correct and the result IS the monthly amount.
-    # Re-reading: "To find the starting monthly investment (PMT)..."
-    # Proceeding with the formula as written.
     
     return {"starting_monthly_investment": round(starting_sip, 2)}
 
