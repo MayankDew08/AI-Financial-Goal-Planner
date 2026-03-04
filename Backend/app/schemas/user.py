@@ -99,6 +99,24 @@ class Retirement(CreateUser):
         return self.life_expectancy - self.retirement_age
 
 
+class RetirementRequest(BaseModel):
+    """Retirement endpoint request — only retirement-specific fields. User data fetched from DB."""
+    retirement_age: int = Field(..., ge=35, le=80, description="Target Retirement Age")
+    post_retirement_expense_pct: float = Field(..., gt=0, le=100, description="Post-retirement expenses as % of pre-retirement expenses")
+    post_retirement_return: float = Field(7.0, gt=0, le=20, description="Expected annual return on retirement corpus post-retirement (%)")
+    pre_retirement_return: float = Field(10.0, gt=0, le=20, description="Expected blended annual return on portfolio pre-retirement (%)")
+    life_expectancy: int = Field(..., ge=60, le=100, description="Life expectancy of the younger spouse (or self if single)")
+    annual_post_retirement_income: float = Field(0.0, ge=0, description="Annual post-retirement income (pension, rent, etc.) in today's value")
+    existing_corpus: float = Field(0.0, ge=0, description="Existing retirement corpus today")
+    existing_monthly_sip: float = Field(0.0, ge=0, description="Existing monthly SIP toward retirement")
+    sip_raise_pct: float = Field(0.0, ge=0, le=50, description="Annual step-up % on existing SIP (0 if no step-up)")
+
+    @model_validator(mode='after')
+    def validate_retirement_inputs(self) -> Self:
+        if self.life_expectancy <= self.retirement_age:
+            raise ValueError("life_expectancy must be greater than retirement_age")
+        return self
+
 
 class BucketAllocation(BaseModel):
     name: str

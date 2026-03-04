@@ -5,16 +5,23 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements file
-COPY Backend/requirements.txt .
+COPY requirements.txt .
 
-# Install dependencies
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY Backend/app .
+COPY . .
 
 # Expose port
 EXPOSE 8000
 
-# Run application
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Set environment variables (can be overridden at runtime)
+ENV PYTHONUNBUFFERED=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/').read()" || exit 1
+
+# Run application with auto-reload disabled for production
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
