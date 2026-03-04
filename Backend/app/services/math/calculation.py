@@ -1,5 +1,5 @@
 
-from app.models.calculation import (
+from app.schemas.calculation import (
     FutureValue, 
     BlendedReturn, 
     RequiredAnnualSavings, 
@@ -97,11 +97,6 @@ def check_rebalancing(data: CheckRebalancing):
 # Phase 1 Implementation
 
 def calculate_sip(data: SIPRequest):
-    """
-    Calculates initial monthly SIP with step-up adjusted for inflation and salary hike.
-    Step-up rate derived: g = ((1 + income_raise_pct) / (1 + inflation_rate)) - 1
-    Formula: PMT = (Target * (r - g)) / (((1+r)^N - (1+g)^N) * (1+r))
-    """
     target_corpus = data.target_corpus
     r = data.pre_ret_return / 100
     inflation_rate = data.inflation_rate / 100
@@ -123,12 +118,6 @@ def calculate_sip(data: SIPRequest):
     return {"starting_monthly_investment": round(starting_sip, 2)}
 
 def calculate_glide_path(data: GlidePathRequest):
-    """
-    Generates a year-by-year schedule of Equity/Debt ratio.
-    Formula: Equity Weight (E_t) = E_start - ( (E_start - E_end) / (T) ) * (t)
-    t = current year of plan (0 to T)
-    T = Total years (goal_age - current_age)
-    """
     current_age = data.current_age
     goal_age = data.goal_age
     e_start = data.start_equity_percent
@@ -155,45 +144,6 @@ def calculate_glide_path(data: GlidePathRequest):
     return {"yearly_allocation_table": schedule}
 
 def check_portfolio_rebalance(data: RebalanceRequest):
-    """
-    Monitors portfolio drift. 5/25 Rule.
-    1. Calculate Actual Ratio (Equity %)
-    2. Calculate Drift = |Actual - Target|
-    3. Trigger:
-       - If Target >= 20%: Suggest if Drift > 5% (absolute percentage points)
-       - If Target < 20%: Suggest if Drift / Target > 0.25 (25% relative deviation)
-         Wait, Prompt says:
-         "If the Equity domain is a large part of the portfolio (Target > 20%), suggest rebalancing if Drift > 5%."
-         "If it is a small domain (Target < 20%), suggest rebalancing if Drift > 25%." (Ambiguous: 25% absolute or relative?)
-         Common 5/25 rule: 
-         - Absolute drift of 5% (e.g. 60% -> 65%)
-         - OR Relative drift of 25% of the target allocation (e.g. 10% -> 12.5%)
-         
-         Prompt says "suggest rebalancing if Drift > 25%". Given the context of "small domain", and the name 5/25, it usually implies relative deviation for small asset classes.
-         BUT, "Drift > 25%" syntax implies absolute drift in the prompt's context of "Drift = |Actual - Target|".
-         However, 25% absolute drift on a <20% portfolio is impossible (it would negative or huge).
-         So for small domain, it MUST be relative. 
-         Let's assume:
-         Condition 1 (Large): |Actual - Target| > 5 (percentage points)
-         Condition 2 (Small): |Actual - Target| > 0.25 * Target
-         
-         Let's stick literally to the prompt text if possible?
-         "If it is a small domain (Target < 20%), suggest rebalancing if Drift > 25%."
-         If Target is 10%, Drift > 25% means Actual is >35% or <-15%? No.
-         It means Drift (absolute) > 25. Which is huge.
-         So it implies Relative Drift.
-         
-         Let's implement:
-         actual_equity_ratio = Equity / Total
-         target = data.current_year_target_ratio (decimal)
-         
-         drift = abs(actual - target) (decimal)
-         
-         if target > 0.20:
-             chk = drift > 0.05
-         else:
-             chk = drift > (0.25 * target)
-    """
     current_equity = data.current_equity_value
     current_debt = data.current_debt_value
     target_equity_ratio = data.current_year_target_ratio # decimal, e.g. 0.60
@@ -219,9 +169,6 @@ def check_portfolio_rebalance(data: RebalanceRequest):
             
     suggested_move = 0
     if rebalance_required:
-        # Calculate amount to move to restore target
-        # Target Equity = Total * Target Ratio
-        # Move = Target Equity - Actual Equity
         target_equity_val = total_portfolio * target_equity_ratio
         suggested_move = target_equity_val - current_equity
         # Positive means Buy Equity (Move from Debt to Equity)

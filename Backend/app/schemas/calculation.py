@@ -37,7 +37,7 @@ class SIPRequest(BaseModel):
     inflation_rate: float
     income_raise_pct: float
     years_to_goal: int
-    annual_step_up_percent: float = None  # Deprecated: use inflation_rate and income_raise_pct
+    annual_step_up_percent: float = None  
 
 class GlidePathRequest(BaseModel):
     current_age: int
@@ -48,4 +48,4 @@ class GlidePathRequest(BaseModel):
 class RebalanceRequest(BaseModel):
     current_equity_value: float
     current_debt_value: float
-    current_year_target_ratio: float  # e.g., 0.60 for 60% equity
+    current_year_target_ratio: float  

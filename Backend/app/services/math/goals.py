@@ -1,5 +1,5 @@
 from typing import Optional
-from app.models.user import Retirement, BucketAllocation
+from app.schemas.user import Retirement, BucketAllocation
 import os
 from openai import OpenAI
 import datetime
@@ -546,3 +546,16 @@ def explain_retirement_plan_with_ai(
     
     except Exception as e:
         return f"Error generating AI explanation: {str(e)}"
+    
+
+def save_retirement_plan(db, user_id: str, plan: dict, retirement_age: int):
+    from app.models.db import RetirementPlan
+    plan_record = RetirementPlan(
+        user_id=user_id,
+        plan_data=plan,
+        retirement_age=retirement_age
+    )
+    db.add(plan_record)
+    db.commit()
+    db.refresh(plan_record)
+    return plan_record

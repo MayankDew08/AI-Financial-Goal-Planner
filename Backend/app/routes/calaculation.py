@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, APIRouter, Form
-from app.models.calculation import (
+from app.schemas.calculation import (
     FutureValue,
     BlendedReturn,
     RequiredAnnualSavings,
