@@ -1,18 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:convert';
 import 'package:http/http.dart' as http;
-
-// ── Colors (shared with welcome.dart) ────────────────────────────────────────
-class AppColors {
-  static const Color green = Color(0xFF00FF7F);
-  static const Color greenDim = Color(0xFF00C45F);
-  static const Color black = Color(0xFF020805);
-  static const Color blackMid = Color(0xFF0A120D);
-  static const Color blackCard = Color(0xFF0D1A10);
-  static const Color textMuted = Color(0xFFC8F0D5);
-  static const Color error = Color(0xFFFF4F4F);
-}
+import 'app_theme.dart';
 
 class UserOnboardingPage extends StatefulWidget {
   const UserOnboardingPage({super.key});
@@ -245,11 +234,13 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                       FilteringTextInputFormatter.digitsOnly,
                                     ],
                                     validator: (v) {
-                                      if (v == null || v.isEmpty)
+                                      if (v == null || v.isEmpty) {
                                         return 'Required';
+                                      }
                                       final n = int.tryParse(v);
-                                      if (n == null || n < 18 || n > 100)
+                                      if (n == null || n < 18 || n > 100) {
                                         return '18–100';
+                                      }
                                       return null;
                                     },
                                   ),
@@ -272,8 +263,9 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                   ),
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
-                                if (double.tryParse(v) == null)
+                                if (double.tryParse(v) == null) {
                                   return 'Enter a valid amount';
+                                }
                                 return null;
                               },
                             ),
@@ -325,8 +317,9 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
                                     final n = int.tryParse(v);
-                                    if (n == null || n < 18 || n > 100)
+                                    if (n == null || n < 18 || n > 100) {
                                       return '18–100';
+                                    }
                                   }
                                   return null;
                                 },
@@ -342,8 +335,9 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                     ),
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
-                                    if (double.tryParse(v) == null)
+                                    if (double.tryParse(v) == null) {
                                       return 'Enter a valid amount';
+                                    }
                                   }
                                   return null;
                                 },
