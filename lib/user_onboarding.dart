@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'app_theme.dart';
+import 'main_nav.dart';
+import 'api_service.dart';
 
+// ── Onboarding Page ───────────────────────────────────────────────────────────
 class UserOnboardingPage extends StatefulWidget {
   const UserOnboardingPage({super.key});
 
@@ -18,14 +20,24 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
 
   // ── Form state ──────────────────────────────────────────────────────────────
   String _maritalStatus = 'single';
+  // Account credentials
+  final _emailCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  final _fullNameCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  // Personal & financial
   final _ageCtrl = TextEditingController();
   final _incomeCtrl = TextEditingController();
   final _incomeRaiseCtrl = TextEditingController();
+  final _monthlyExpensesCtrl = TextEditingController();
+  final _inflationRateCtrl = TextEditingController(text: '6.0');
+  // Spouse (optional)
   final _spouseAgeCtrl = TextEditingController();
   final _spouseIncomeCtrl = TextEditingController();
   final _spouseIncomeRaiseCtrl = TextEditingController();
 
   bool _isLoading = false;
+  bool _obscurePassword = true;
   String? _errorMsg;
 
   bool get _isMarried => _maritalStatus == 'married';
@@ -44,65 +56,115 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
   @override
   void dispose() {
     _fadeCtrl.dispose();
+    _emailCtrl.dispose();
+    _passwordCtrl.dispose();
+    _fullNameCtrl.dispose();
+    _phoneCtrl.dispose();
     _ageCtrl.dispose();
     _incomeCtrl.dispose();
     _incomeRaiseCtrl.dispose();
+    _monthlyExpensesCtrl.dispose();
+    _inflationRateCtrl.dispose();
     _spouseAgeCtrl.dispose();
     _spouseIncomeCtrl.dispose();
     _spouseIncomeRaiseCtrl.dispose();
     super.dispose();
   }
 
-  // ── API call ────────────────────────────────────────────────────────────────
+  // ── Submit: register → login → fetch profile → navigate ─────────────────────
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-
     setState(() {
       _isLoading = true;
       _errorMsg = null;
     });
 
     try {
-      final uri = Uri.parse('https://your-api-domain.com/users/');
+      final email = _emailCtrl.text.trim();
+      final password = _passwordCtrl.text.trim();
 
-      final body = {
-        'marital_status': _maritalStatus,
-        'age': _ageCtrl.text.trim(),
-        'current_income': _incomeCtrl.text.trim(),
-        'income_raise_pct': _incomeRaiseCtrl.text.trim(),
-        if (_isMarried && _spouseAgeCtrl.text.isNotEmpty)
-          'spouse_age': _spouseAgeCtrl.text.trim(),
-        if (_isMarried && _spouseIncomeCtrl.text.isNotEmpty)
-          'spouse_income': _spouseIncomeCtrl.text.trim(),
-        if (_isMarried && _spouseIncomeRaiseCtrl.text.isNotEmpty)
-          'spouse_income_raise_pct': _spouseIncomeRaiseCtrl.text.trim(),
-      };
+      // Step 1: POST /user/ — create account
+      // Response: { "user_id": "...", "message": "...", "user": {...} }
+      late final String userId;
+      try {
+        final registerResp = await ApiService.instance.createUser(
+          email: email,
+          password: password,
+          fullName: _fullNameCtrl.text.trim(),
+          phoneNumber: _phoneCtrl.text.trim(),
+          maritalStatus: _maritalStatus,
+          age: int.parse(_ageCtrl.text.trim()),
+          currentIncome: double.parse(_incomeCtrl.text.trim()),
+          incomeRaisePct: double.parse(_incomeRaiseCtrl.text.trim()),
+          currentMonthlyExpenses: double.parse(
+            _monthlyExpensesCtrl.text.trim(),
+          ),
+          inflationRate: double.parse(_inflationRateCtrl.text.trim()),
+          spouseAge: _isMarried && _spouseAgeCtrl.text.isNotEmpty
+              ? int.tryParse(_spouseAgeCtrl.text.trim())
+              : null,
+          spouseIncome: _isMarried && _spouseIncomeCtrl.text.isNotEmpty
+              ? double.tryParse(_spouseIncomeCtrl.text.trim())
+              : null,
+          spouseIncomeRaisePct:
+              _isMarried && _spouseIncomeRaiseCtrl.text.isNotEmpty
+              ? double.tryParse(_spouseIncomeRaiseCtrl.text.trim())
+              : null,
+        );
+        // Backend returns { "user_id": "...", "user": {...} }
+        // Cache the user object directly from register response — no extra call needed
+        final userObj = registerResp['user'] as Map<String, dynamic>?;
+        if (userObj != null) ApiService.instance.cachedProfile = userObj;
+        userId = registerResp['user_id']?.toString() ?? '';
+      } on ApiException catch (e) {
+        throw ApiException('REGISTER: ${e.message}');
+      }
 
-      final response = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: body,
+      // Step 2: POST /auth/login — get JWT token
+      try {
+        await ApiService.instance.login(email: email, password: password);
+      } on ApiException catch (e) {
+        throw ApiException('LOGIN: ${e.message}');
+      }
+
+      // Step 3: Profile already cached from register response.
+      // If cache is empty for any reason, fetch by ID as fallback.
+      if (ApiService.instance.cachedProfile == null && userId.isNotEmpty) {
+        try {
+          await ApiService.instance.fetchProfileById(userId);
+        } on ApiException catch (e) {
+          throw ApiException('PROFILE: ${e.message}');
+        }
+      }
+      final profile = ApiService.instance.buildUserProfile();
+
+      // Step 4: Build Flutter UserProfile and navigate
+      final user = UserProfile(
+        name: profile.name,
+        maritalStatus: profile.maritalStatus,
+        age: profile.age,
+        currentIncome: profile.currentIncome,
+        incomeRaisePct: profile.incomeRaisePct,
+        spouseAge: profile.spouseAge,
+        spouseIncome: profile.spouseIncome,
+        spouseIncomeRaisePct: profile.spouseIncomeRaisePct,
       );
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        if (mounted) _showSuccessDialog();
-      } else {
-        setState(
-          () => _errorMsg =
-              'Server error ${response.statusCode}. Please try again.',
-        );
-      }
+      if (mounted) _showSuccessDialog(user);
+    } on ApiException catch (e) {
+      setState(() => _errorMsg = e.message);
     } catch (e) {
-      setState(() => _errorMsg = 'Connection failed. Check your network.');
+      setState(() => _errorMsg = 'Unexpected error: ${e.toString()}');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _showSuccessDialog() {
+  void _showSuccessDialog(UserProfile user) {
     showDialog(
       context: context,
-      builder: (_) => Dialog(
+      barrierDismissible: false,
+      builder: (dialogCtx) => Dialog(
         backgroundColor: AppColors.blackCard,
         shape: const RoundedRectangleBorder(),
         child: Padding(
@@ -137,7 +199,13 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
               ),
               const SizedBox(height: 28),
               GestureDetector(
-                onTap: () => Navigator.of(context).pop(),
+                onTap: () {
+                  Navigator.of(dialogCtx).pop();
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => MainNav(user: user)),
+                    (route) => false,
+                  );
+                },
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 28,
@@ -215,8 +283,79 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                             _buildHeader(),
                             const SizedBox(height: 32),
 
-                            // ── Section 1: Personal ────────────────────────
-                            _SectionLabel(label: '01', title: 'PERSONAL INFO'),
+                            // ── Section 0: Account ────────────────────────
+                            _SectionLabel(
+                              label: '01',
+                              title: 'ACCOUNT DETAILS',
+                            ),
+                            const SizedBox(height: 20),
+                            _GreenField(
+                              label: 'FULL NAME',
+                              hint: 'e.g. Alex Johnson',
+                              controller: _fullNameCtrl,
+                              validator: (v) => (v == null || v.trim().isEmpty)
+                                  ? 'Required'
+                                  : null,
+                            ),
+                            const SizedBox(height: 16),
+                            _GreenField(
+                              label: 'EMAIL ADDRESS',
+                              hint: 'e.g. alex@email.com',
+                              controller: _emailCtrl,
+                              keyboardType: TextInputType.emailAddress,
+                              validator: (v) {
+                                if (v == null || v.isEmpty) return 'Required';
+                                if (!v.contains('@'))
+                                  return 'Enter a valid email';
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _GreenField(
+                              label:
+                                  'PHONE NUMBER (10 digits, no country code)',
+                              hint: 'e.g. 9876543210',
+                              controller: _phoneCtrl,
+                              keyboardType: TextInputType.phone,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                                LengthLimitingTextInputFormatter(10),
+                              ],
+                              validator: (v) {
+                                if (v == null || v.isEmpty) return 'Required';
+                                if (v.length != 10)
+                                  return 'Must be exactly 10 digits';
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _GreenField(
+                              label: 'PASSWORD',
+                              hint: 'Min. 8 characters',
+                              controller: _passwordCtrl,
+                              obscureText: _obscurePassword,
+                              suffixIcon: GestureDetector(
+                                onTap: () => setState(
+                                  () => _obscurePassword = !_obscurePassword,
+                                ),
+                                child: Icon(
+                                  _obscurePassword
+                                      ? Icons.visibility_off_outlined
+                                      : Icons.visibility_outlined,
+                                  color: AppColors.green.withOpacity(0.5),
+                                  size: 18,
+                                ),
+                              ),
+                              validator: (v) {
+                                if (v == null || v.isEmpty) return 'Required';
+                                if (v.length < 8) return 'Min. 8 characters';
+                                return null;
+                              },
+                            ),
+
+                            // ── Section 2: Personal ────────────────────────
+                            const SizedBox(height: 32),
+                            _SectionLabel(label: '02', title: 'PERSONAL INFO'),
                             const SizedBox(height: 20),
 
                             _buildMaritalToggle(),
@@ -234,13 +373,11 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                       FilteringTextInputFormatter.digitsOnly,
                                     ],
                                     validator: (v) {
-                                      if (v == null || v.isEmpty) {
+                                      if (v == null || v.isEmpty)
                                         return 'Required';
-                                      }
                                       final n = int.tryParse(v);
-                                      if (n == null || n < 18 || n > 100) {
+                                      if (n == null || n < 18 || n > 100)
                                         return '18–100';
-                                      }
                                       return null;
                                     },
                                   ),
@@ -263,9 +400,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                   ),
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
-                                if (double.tryParse(v) == null) {
+                                if (double.tryParse(v) == null)
                                   return 'Enter a valid amount';
-                                }
                                 return null;
                               },
                             ),
@@ -284,6 +420,39 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 final n = double.tryParse(v);
                                 if (n == null) return 'Enter a valid %';
                                 if (n < 0 || n > 100) return '0–100';
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _GreenField(
+                              label: 'CURRENT MONTHLY EXPENSES (\$)',
+                              hint: 'e.g. 3000.00',
+                              controller: _monthlyExpensesCtrl,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              validator: (v) {
+                                if (v == null || v.isEmpty) return 'Required';
+                                if (double.tryParse(v) == null)
+                                  return 'Enter a valid amount';
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: 16),
+                            _GreenField(
+                              label: 'EXPECTED INFLATION RATE (%)',
+                              hint: 'e.g. 6.0',
+                              controller: _inflationRateCtrl,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              suffix: '%',
+                              validator: (v) {
+                                if (v == null || v.isEmpty) return 'Required';
+                                final n = double.tryParse(v);
+                                if (n == null || n < 0 || n > 30) return '0–30';
                                 return null;
                               },
                             ),
@@ -317,9 +486,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
                                     final n = int.tryParse(v);
-                                    if (n == null || n < 18 || n > 100) {
+                                    if (n == null || n < 18 || n > 100)
                                       return '18–100';
-                                    }
                                   }
                                   return null;
                                 },
@@ -335,9 +503,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                     ),
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
-                                    if (double.tryParse(v) == null) {
+                                    if (double.tryParse(v) == null)
                                       return 'Enter a valid amount';
-                                    }
                                   }
                                   return null;
                                 },
@@ -374,26 +541,72 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                   ),
                                   color: AppColors.error.withOpacity(0.06),
                                 ),
-                                child: Row(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Icon(
-                                      Icons.warning_amber_rounded,
-                                      color: AppColors.error,
-                                      size: 16,
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.warning_amber_rounded,
+                                          color: AppColors.error,
+                                          size: 16,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            _errorMsg!,
+                                            style: TextStyle(
+                                              fontFamily: 'Courier',
+                                              fontSize: 11,
+                                              height: 1.5,
+                                              color: AppColors.error
+                                                  .withOpacity(0.8),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Text(
-                                        _errorMsg!,
-                                        style: TextStyle(
-                                          fontFamily: 'Courier',
-                                          fontSize: 11,
-                                          color: AppColors.error.withOpacity(
-                                            0.8,
+                                    if (_errorMsg!.contains('starting up') ||
+                                        _errorMsg!.contains('cold start')) ...[
+                                      const SizedBox(height: 12),
+                                      GestureDetector(
+                                        onTap: _isLoading ? null : _submit,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 14,
+                                            vertical: 8,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            border: Border.all(
+                                              color: AppColors.error
+                                                  .withOpacity(0.5),
+                                            ),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.refresh,
+                                                color: AppColors.error
+                                                    .withOpacity(0.7),
+                                                size: 13,
+                                              ),
+                                              const SizedBox(width: 6),
+                                              Text(
+                                                'RETRY',
+                                                style: TextStyle(
+                                                  fontFamily: 'Courier',
+                                                  fontSize: 10,
+                                                  letterSpacing: 2,
+                                                  color: AppColors.error
+                                                      .withOpacity(0.7),
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ),
                                       ),
-                                    ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -681,6 +894,8 @@ class _GreenField extends StatelessWidget {
   final TextInputType keyboardType;
   final List<TextInputFormatter>? inputFormatters;
   final String? suffix;
+  final Widget? suffixIcon;
+  final bool obscureText;
   final String? Function(String?)? validator;
 
   const _GreenField({
@@ -691,6 +906,8 @@ class _GreenField extends StatelessWidget {
     this.keyboardType = TextInputType.text,
     this.inputFormatters,
     this.suffix,
+    this.suffixIcon,
+    this.obscureText = false,
   });
 
   @override
@@ -713,6 +930,7 @@ class _GreenField extends StatelessWidget {
           keyboardType: keyboardType,
           inputFormatters: inputFormatters,
           validator: validator,
+          obscureText: obscureText,
           style: const TextStyle(
             fontFamily: 'Courier',
             fontSize: 14,
@@ -733,6 +951,7 @@ class _GreenField extends StatelessWidget {
               fontSize: 13,
               color: AppColors.green.withOpacity(0.5),
             ),
+            suffixIcon: suffixIcon,
             filled: true,
             fillColor: AppColors.blackCard,
             contentPadding: const EdgeInsets.symmetric(

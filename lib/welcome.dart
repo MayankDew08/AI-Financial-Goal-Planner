@@ -151,8 +151,9 @@ class _SplashScreenState extends State<SplashScreen>
               }
 
               if (_wipeInController.isDismissed) return const SizedBox.shrink();
-              if (_wipeOutController.isCompleted)
+              if (_wipeOutController.isCompleted) {
                 return const SizedBox.shrink();
+              }
 
               return Positioned(
                 top: 0,
