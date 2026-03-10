@@ -107,8 +107,9 @@ class ApiService {
 
     final data = _handle(response);
     final t = data['access_token'] as String?;
-    if (t == null)
+    if (t == null) {
       throw const ApiException('No access_token in login response');
+    }
     token = t;
     return t;
   }
@@ -154,10 +155,11 @@ class ApiService {
   // Call fetchProfile() first, then this converts it to the Flutter model.
   UserProfileFromApi buildUserProfile() {
     final p = cachedProfile;
-    if (p == null)
+    if (p == null) {
       throw const ApiException(
         'Profile not loaded. Call fetchProfile() first.',
       );
+    }
 
     return UserProfileFromApi(
       id: p['id']?.toString() ?? '',

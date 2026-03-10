@@ -305,8 +305,9 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               keyboardType: TextInputType.emailAddress,
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
-                                if (!v.contains('@'))
+                                if (!v.contains('@')) {
                                   return 'Enter a valid email';
+                                }
                                 return null;
                               },
                             ),
@@ -323,8 +324,9 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               ],
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
-                                if (v.length != 10)
+                                if (v.length != 10) {
                                   return 'Must be exactly 10 digits';
+                                }
                                 return null;
                               },
                             ),
@@ -373,11 +375,13 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                       FilteringTextInputFormatter.digitsOnly,
                                     ],
                                     validator: (v) {
-                                      if (v == null || v.isEmpty)
+                                      if (v == null || v.isEmpty) {
                                         return 'Required';
+                                      }
                                       final n = int.tryParse(v);
-                                      if (n == null || n < 18 || n > 100)
+                                      if (n == null || n < 18 || n > 100) {
                                         return '18–100';
+                                      }
                                       return null;
                                     },
                                   ),
@@ -400,8 +404,9 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                   ),
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
-                                if (double.tryParse(v) == null)
+                                if (double.tryParse(v) == null) {
                                   return 'Enter a valid amount';
+                                }
                                 return null;
                               },
                             ),
@@ -434,8 +439,9 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                   ),
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
-                                if (double.tryParse(v) == null)
+                                if (double.tryParse(v) == null) {
                                   return 'Enter a valid amount';
+                                }
                                 return null;
                               },
                             ),
@@ -486,8 +492,9 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
                                     final n = int.tryParse(v);
-                                    if (n == null || n < 18 || n > 100)
+                                    if (n == null || n < 18 || n > 100) {
                                       return '18–100';
+                                    }
                                   }
                                   return null;
                                 },
@@ -503,8 +510,9 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                     ),
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
-                                    if (double.tryParse(v) == null)
+                                    if (double.tryParse(v) == null) {
                                       return 'Enter a valid amount';
+                                    }
                                   }
                                   return null;
                                 },
