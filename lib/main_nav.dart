@@ -31,9 +31,9 @@ class _MainNavState extends State<MainNav> with SingleTickerProviderStateMixin {
   }
 
   static const _navItems = [
-    _NavItem(icon: Icons.grid_view_rounded,     label: 'HOME'),
-    _NavItem(icon: Icons.flag_outlined,          label: 'GOALS'),
-    _NavItem(icon: Icons.bar_chart_rounded,      label: 'PLANNER'),
+    _NavItem(icon: Icons.grid_view_rounded, label: 'HOME'),
+    _NavItem(icon: Icons.flag_outlined, label: 'GOALS'),
+    _NavItem(icon: Icons.bar_chart_rounded, label: 'PLANNER'),
     _NavItem(icon: Icons.person_outline_rounded, label: 'PROFILE'),
   ];
 
@@ -74,9 +74,8 @@ class _MainNavState extends State<MainNav> with SingleTickerProviderStateMixin {
                     decoration: BoxDecoration(
                       border: Border(
                         top: BorderSide(
-                          color: selected
-                              ? AppColors.green
-                              : Colors.transparent,
+                          color:
+                              selected ? AppColors.green : Colors.transparent,
                           width: 2,
                         ),
                       ),
@@ -108,9 +107,8 @@ class _MainNavState extends State<MainNav> with SingleTickerProviderStateMixin {
                             fontFamily: 'Courier',
                             fontSize: 8,
                             letterSpacing: 2,
-                            fontWeight: selected
-                                ? FontWeight.bold
-                                : FontWeight.normal,
+                            fontWeight:
+                                selected ? FontWeight.bold : FontWeight.normal,
                             color: selected
                                 ? AppColors.green
                                 : AppColors.textMuted.withOpacity(0.3),

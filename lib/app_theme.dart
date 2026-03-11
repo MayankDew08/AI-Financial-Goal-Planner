@@ -1,30 +1,48 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 
 // ── App Colors ────────────────────────────────────────────────────────────────
 class AppColors {
-  static const Color green      = Color(0xFF00FF7F);
-  static const Color greenDim   = Color(0xFF00C45F);
-  static const Color black      = Color(0xFF020805);
-  static const Color blackMid   = Color(0xFF0A120D);
-  static const Color blackCard  = Color(0xFF0D1A10);
-  static const Color blackBorder= Color(0xFF162318);
-  static const Color textMuted  = Color(0xFFC8F0D5);
-  static const Color error      = Color(0xFFFF4F4F);
+  static const Color green = Color(0xFF00FF7F);
+  static const Color greenDim = Color(0xFF00C45F);
+  static const Color black = Color(0xFF020805);
+  static const Color blackMid = Color(0xFF0A120D);
+  static const Color blackCard = Color(0xFF0D1A10);
+  static const Color blackBorder = Color(0xFF162318);
+  static const Color textMuted = Color(0xFFC8F0D5);
+  static const Color error = Color(0xFFFF4F4F);
+
+  // ── Input field fill ──────────────────────────────────────────────────────
+  // blackCard (0x0D1A10) is too dark as a TextFormField background — white
+  // input text and hint text disappear against it. inputFill is lighter so
+  // both read clearly while staying on-theme.
+  static const Color inputFill = Color(0xFF152318);
+
+  // ── Readable label / hint constants ──────────────────────────────────────
+  // Replace inline withOpacity() calls that were producing colours too faint
+  // to read on the dark backgrounds.
+  static const Color fieldLabel =
+      Color(0xFF7DC49A); // field labels (EMAIL ADDRESS etc.)
+  static const Color hintText =
+      Color(0xFF4A7A5A); // placeholder / hint inside inputs
 }
 
 // ── Shared TextStyles ─────────────────────────────────────────────────────────
 class AppText {
   static const mono = 'Courier';
 
-  static TextStyle label({double size = 10, double spacing = 3, Color? color}) =>
+  static TextStyle label(
+          {double size = 11, double spacing = 3, Color? color}) =>
       TextStyle(
         fontFamily: mono,
         fontSize: size,
         letterSpacing: spacing,
-        color: color ?? AppColors.green.withOpacity(0.65),
+        // was textMuted@0.85 — fieldLabel is a solid colour, always readable
+        color: color ?? AppColors.fieldLabel,
       );
 
-  static TextStyle heading({double size = 28, Color color = Colors.white}) =>
+  static TextStyle heading({double size = 30, Color color = Colors.white}) =>
       TextStyle(
         fontFamily: mono,
         fontSize: size,
@@ -34,11 +52,12 @@ class AppText {
         height: 1.05,
       );
 
-  static TextStyle body({double size = 12, Color? color}) => TextStyle(
+  static TextStyle body({double size = 13, Color? color}) => TextStyle(
         fontFamily: mono,
         fontSize: size,
         height: 1.7,
-        color: color ?? AppColors.textMuted.withOpacity(0.5),
+        // was textMuted@0.75 — full textMuted colour is legible on dark cards
+        color: color ?? AppColors.textMuted,
       );
 }
 
@@ -66,7 +85,6 @@ class UserProfile {
 
   bool get isMarried => maritalStatus.toLowerCase() == 'married';
 
-  // Mock data — replace with SharedPreferences / state management later
   static const UserProfile mock = UserProfile(
     name: 'Alex',
     maritalStatus: 'married',

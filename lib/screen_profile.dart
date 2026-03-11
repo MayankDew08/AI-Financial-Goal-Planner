@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'app_theme.dart';
 
@@ -11,7 +13,8 @@ class ProfileScreen extends StatelessWidget {
       backgroundColor: AppColors.black,
       body: Stack(
         children: [
-          CustomPaint(size: MediaQuery.of(context).size, painter: GridPainter()),
+          CustomPaint(
+              size: MediaQuery.of(context).size, painter: GridPainter()),
           SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
@@ -57,10 +60,22 @@ class ProfileScreen extends StatelessWidget {
             Row(children: [
               Container(width: 20, height: 1, color: AppColors.green),
               const SizedBox(width: 10),
-              Text('MY PROFILE', style: TextStyle(fontFamily: 'Courier', fontSize: 9, letterSpacing: 4, color: AppColors.green.withOpacity(0.6))),
+              Text('MY PROFILE',
+                  style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 9,
+                      letterSpacing: 4,
+                      color: AppColors.green.withOpacity(0.6))),
             ]),
             const SizedBox(height: 10),
-            const Text('ACCOUNT\nOVERVIEW.', style: TextStyle(fontFamily: 'Courier', fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: 2, height: 1.0, color: Colors.white)),
+            const Text('ACCOUNT\nOVERVIEW.',
+                style: TextStyle(
+                    fontFamily: 'Courier',
+                    fontSize: 32,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 2,
+                    height: 1.0,
+                    color: Colors.white)),
           ],
         ),
       ],
@@ -78,7 +93,8 @@ class ProfileScreen extends StatelessWidget {
         children: [
           // Avatar circle
           Container(
-            width: 64, height: 64,
+            width: 64,
+            height: 64,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(color: AppColors.green, width: 1.5),
@@ -88,9 +104,14 @@ class ProfileScreen extends StatelessWidget {
               child: Text(
                 user.name[0].toUpperCase(),
                 style: TextStyle(
-                  fontFamily: 'Courier', fontSize: 28, fontWeight: FontWeight.bold,
+                  fontFamily: 'Courier',
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
                   color: AppColors.green,
-                  shadows: [Shadow(color: AppColors.green.withOpacity(0.4), blurRadius: 12)],
+                  shadows: [
+                    Shadow(
+                        color: AppColors.green.withOpacity(0.4), blurRadius: 12)
+                  ],
                 ),
               ),
             ),
@@ -99,11 +120,22 @@ class ProfileScreen extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(user.name.toUpperCase(), style: const TextStyle(fontFamily: 'Courier', fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 3, color: Colors.white)),
+              Text(user.name.toUpperCase(),
+                  style: const TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 3,
+                      color: Colors.white)),
               const SizedBox(height: 6),
               _StatusBadge(status: user.maritalStatus),
               const SizedBox(height: 6),
-              Text('MEMBER SINCE 2025', style: TextStyle(fontFamily: 'Courier', fontSize: 9, letterSpacing: 2, color: AppColors.textMuted.withOpacity(0.3))),
+              Text('MEMBER SINCE 2025',
+                  style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 9,
+                      letterSpacing: 2,
+                      color: AppColors.textMuted.withOpacity(0.3))),
             ],
           ),
         ],
@@ -114,9 +146,10 @@ class ProfileScreen extends StatelessWidget {
   Widget _buildPersonalCard() {
     return _InfoCard(
       rows: [
-        _InfoRow(label: 'FULL NAME',      value: user.name.toUpperCase()),
-        _InfoRow(label: 'AGE',            value: '${user.age} years'),
-        _InfoRow(label: 'MARITAL STATUS', value: user.maritalStatus.toUpperCase()),
+        _InfoRow(label: 'FULL NAME', value: user.name.toUpperCase()),
+        _InfoRow(label: 'AGE', value: '${user.age} years'),
+        _InfoRow(
+            label: 'MARITAL STATUS', value: user.maritalStatus.toUpperCase()),
       ],
     );
   }
@@ -145,9 +178,19 @@ class ProfileScreen extends StatelessWidget {
     return _InfoCard(
       accentColor: AppColors.greenDim,
       rows: [
-        _InfoRow(label: "SPOUSE'S AGE",    value: '${user.spouseAge ?? "—"} years'),
-        _InfoRow(label: "SPOUSE'S INCOME", value: user.spouseIncome != null ? '\$${user.spouseIncome!.toStringAsFixed(2)}' : '—', highlight: true),
-        _InfoRow(label: "SPOUSE'S RAISE",  value: user.spouseIncomeRaisePct != null ? '${user.spouseIncomeRaisePct}% per year' : '—'),
+        _InfoRow(
+            label: "SPOUSE'S AGE", value: '${user.spouseAge ?? "—"} years'),
+        _InfoRow(
+            label: "SPOUSE'S INCOME",
+            value: user.spouseIncome != null
+                ? '\$${user.spouseIncome!.toStringAsFixed(2)}'
+                : '—',
+            highlight: true),
+        _InfoRow(
+            label: "SPOUSE'S RAISE",
+            value: user.spouseIncomeRaisePct != null
+                ? '${user.spouseIncomeRaisePct}% per year'
+                : '—'),
       ],
     );
   }
@@ -157,9 +200,13 @@ class ProfileScreen extends StatelessWidget {
       onTap: () {
         // Navigate to UserOnboardingPage with pre-filled data
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             backgroundColor: AppColors.blackCard,
-            content: Text('Edit profile — connect to UserOnboardingPage', style: TextStyle(fontFamily: 'Courier', fontSize: 11, color: AppColors.green)),
+            content: Text('Edit profile — connect to UserOnboardingPage',
+                style: TextStyle(
+                    fontFamily: 'Courier',
+                    fontSize: 11,
+                    color: AppColors.green)),
           ),
         );
       },
@@ -172,7 +219,13 @@ class ProfileScreen extends StatelessWidget {
           children: [
             Icon(Icons.edit_outlined, color: AppColors.black, size: 16),
             SizedBox(width: 10),
-            Text('EDIT PROFILE', style: TextStyle(fontFamily: 'Courier', fontSize: 12, letterSpacing: 4, fontWeight: FontWeight.bold, color: AppColors.black)),
+            Text('EDIT PROFILE',
+                style: TextStyle(
+                    fontFamily: 'Courier',
+                    fontSize: 12,
+                    letterSpacing: 4,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.black)),
           ],
         ),
       ),
@@ -191,9 +244,15 @@ class ProfileScreen extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.logout, color: AppColors.textMuted.withOpacity(0.35), size: 16),
+            Icon(Icons.logout,
+                color: AppColors.textMuted.withOpacity(0.35), size: 16),
             const SizedBox(width: 10),
-            Text('SIGN OUT', style: TextStyle(fontFamily: 'Courier', fontSize: 12, letterSpacing: 4, color: AppColors.textMuted.withOpacity(0.35))),
+            Text('SIGN OUT',
+                style: TextStyle(
+                    fontFamily: 'Courier',
+                    fontSize: 12,
+                    letterSpacing: 4,
+                    color: AppColors.textMuted.withOpacity(0.35))),
           ],
         ),
       ),
@@ -204,7 +263,12 @@ class ProfileScreen extends StatelessWidget {
         children: [
           Container(width: 20, height: 1, color: AppColors.green),
           const SizedBox(width: 10),
-          Text(title, style: TextStyle(fontFamily: 'Courier', fontSize: 10, letterSpacing: 4, color: AppColors.green.withOpacity(0.7))),
+          Text(title,
+              style: TextStyle(
+                  fontFamily: 'Courier',
+                  fontSize: 10,
+                  letterSpacing: 4,
+                  color: AppColors.green.withOpacity(0.7))),
         ],
       );
 }
@@ -221,14 +285,20 @@ class _StatusBadge extends StatelessWidget {
           border: Border.all(color: AppColors.green.withOpacity(0.3)),
           color: AppColors.green.withOpacity(0.07),
         ),
-        child: Text(status.toUpperCase(), style: TextStyle(fontFamily: 'Courier', fontSize: 9, letterSpacing: 3, color: AppColors.green.withOpacity(0.7))),
+        child: Text(status.toUpperCase(),
+            style: TextStyle(
+                fontFamily: 'Courier',
+                fontSize: 9,
+                letterSpacing: 3,
+                color: AppColors.green.withOpacity(0.7))),
       );
 }
 
 class _InfoRow {
   final String label, value;
   final bool highlight;
-  const _InfoRow({required this.label, required this.value, this.highlight = false});
+  const _InfoRow(
+      {required this.label, required this.value, this.highlight = false});
 }
 
 class _InfoCard extends StatelessWidget {
@@ -257,17 +327,28 @@ class _InfoCard extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Text(row.label, style: TextStyle(fontFamily: 'Courier', fontSize: 10, letterSpacing: 2, color: AppColors.textMuted.withOpacity(0.4))),
+                Text(row.label,
+                    style: TextStyle(
+                        fontFamily: 'Courier',
+                        fontSize: 10,
+                        letterSpacing: 2,
+                        color: AppColors.textMuted.withOpacity(0.4))),
                 const Spacer(),
                 Text(
                   row.value,
                   style: TextStyle(
                     fontFamily: 'Courier',
                     fontSize: 13,
-                    fontWeight: row.highlight ? FontWeight.bold : FontWeight.normal,
+                    fontWeight:
+                        row.highlight ? FontWeight.bold : FontWeight.normal,
                     letterSpacing: 1,
                     color: row.highlight ? accent : Colors.white,
-                    shadows: row.highlight ? [Shadow(color: accent.withOpacity(0.3), blurRadius: 8)] : null,
+                    shadows: row.highlight
+                        ? [
+                            Shadow(
+                                color: accent.withOpacity(0.3), blurRadius: 8)
+                          ]
+                        : null,
                   ),
                 ),
               ],

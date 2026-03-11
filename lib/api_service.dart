@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 // ── Base URL — swap for your deployed backend ─────────────────────────────────
-const String kBaseUrl = 'https://ai-financial-goal-planner.onrender.com';
+const String kBaseUrl = 'https://your-api-domain.com';
 
 // ── API Service (singleton) ───────────────────────────────────────────────────
 // Usage:
@@ -20,14 +20,14 @@ class ApiService {
 
   // ── Headers ──────────────────────────────────────────────────────────────────
   Map<String, String> get _formHeaders => {
-    'Content-Type': 'application/x-www-form-urlencoded',
-    if (token != null) 'Authorization': 'Bearer $token',
-  };
+        'Content-Type': 'application/x-www-form-urlencoded',
+        if (token != null) 'Authorization': 'Bearer $token',
+      };
 
   Map<String, String> get _jsonHeaders => {
-    'Content-Type': 'application/json',
-    if (token != null) 'Authorization': 'Bearer $token',
-  };
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      };
 
   // ── POST /users/ — register new user ─────────────────────────────────────────
   // ── Debug logger — shows in Flutter console (flutter run output) ─────────────
@@ -121,7 +121,9 @@ class ApiService {
 
     final response = await http.get(
       Uri.parse('$kBaseUrl/auth/profile'),
-      headers: {'Authorization': 'Bearer $token'},
+      headers: {
+        'Authorization': 'Bearer $token',
+      },
     );
 
     debugLog('<<< PROFILE STATUS: ${response.statusCode}');
@@ -157,8 +159,7 @@ class ApiService {
     final p = cachedProfile;
     if (p == null) {
       throw const ApiException(
-        'Profile not loaded. Call fetchProfile() first.',
-      );
+          'Profile not loaded. Call fetchProfile() first.');
     }
 
     return UserProfileFromApi(
@@ -272,7 +273,10 @@ class ApiService {
     final response = await http.post(
       Uri.parse('$kBaseUrl/goals/explain_one_time_goal'),
       headers: _jsonHeaders,
-      body: jsonEncode({'goal_plan': goalPlan, 'user_question': userQuestion}),
+      body: jsonEncode({
+        'goal_plan': goalPlan,
+        'user_question': userQuestion,
+      }),
     );
 
     final data = _handle(response);
@@ -290,8 +294,7 @@ class ApiService {
   Map<String, dynamic> _handle(http.Response response) {
     final contentType = response.headers['content-type'] ?? '';
     final bodyStart = response.body.trimLeft();
-    final isHtml =
-        contentType.contains('text/html') ||
+    final isHtml = contentType.contains('text/html') ||
         bodyStart.startsWith('<!') ||
         bodyStart.startsWith('<html');
 
@@ -384,20 +387,24 @@ class ApiService {
   // POST /calculation/starting-sip
   // Answers: "What monthly SIP do I need to reach a target corpus?"
   // Schema: SIPRequest { target_corpus, years, annual_return, existing_corpus? }
+  // POST /calculation/starting-sip
+  // Schema: SIPRequest { goal_amount, years_to_goal, pre_ret_return, inflation_rate, income_raise_pct }
   Future<Map<String, dynamic>> calcStartingSip({
-    required double targetCorpus,
-    required double years,
-    required double annualReturn,
-    double existingCorpus = 0,
+    required double goalAmount,
+    required double yearsToGoal,
+    required double preRetReturn,
+    required double inflationRate,
+    required double incomeRaisePct,
   }) async {
     final response = await http.post(
       Uri.parse('$kBaseUrl/calculation/starting-sip'),
       headers: _jsonHeaders,
       body: jsonEncode({
-        'target_corpus': targetCorpus,
-        'years': years,
-        'annual_return': annualReturn,
-        'existing_corpus': existingCorpus,
+        'goal_amount': goalAmount,
+        'years_to_goal': yearsToGoal,
+        'pre_ret_return': preRetReturn,
+        'inflation_rate': inflationRate,
+        'income_raise_pct': incomeRaisePct,
       }),
     );
     return _handle(response);
@@ -433,7 +440,10 @@ class ApiService {
     final response = await http.post(
       Uri.parse('$kBaseUrl/calculation/suggest_allocation'),
       headers: _jsonHeaders,
-      body: jsonEncode({'age': age, 'risk_tolerance': riskTolerance}),
+      body: jsonEncode({
+        'age': age,
+        'risk_tolerance': riskTolerance,
+      }),
     );
     return _handle(response);
   }

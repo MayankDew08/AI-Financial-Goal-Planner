@@ -108,8 +108,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
               : null,
           spouseIncomeRaisePct:
               _isMarried && _spouseIncomeRaiseCtrl.text.isNotEmpty
-              ? double.tryParse(_spouseIncomeRaiseCtrl.text.trim())
-              : null,
+                  ? double.tryParse(_spouseIncomeRaiseCtrl.text.trim())
+                  : null,
         );
         // Backend returns { "user_id": "...", "user": {...} }
         // Cache the user object directly from register response — no extra call needed
@@ -172,7 +172,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
+              const Icon(
                 Icons.check_circle_outline,
                 color: AppColors.green,
                 size: 48,
@@ -284,7 +284,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                             const SizedBox(height: 32),
 
                             // ── Section 0: Account ────────────────────────
-                            _SectionLabel(
+                            const _SectionLabel(
                               label: '01',
                               title: 'ACCOUNT DETAILS',
                             ),
@@ -357,7 +357,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
 
                             // ── Section 2: Personal ────────────────────────
                             const SizedBox(height: 32),
-                            _SectionLabel(label: '02', title: 'PERSONAL INFO'),
+                            const _SectionLabel(
+                                label: '02', title: 'PERSONAL INFO'),
                             const SizedBox(height: 20),
 
                             _buildMaritalToggle(),
@@ -391,7 +392,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
 
                             // ── Section 2: Income ──────────────────────────
                             const SizedBox(height: 32),
-                            _SectionLabel(label: '02', title: 'YOUR INCOME'),
+                            const _SectionLabel(
+                                label: '02', title: 'YOUR INCOME'),
                             const SizedBox(height: 20),
 
                             _GreenField(
@@ -400,8 +402,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               controller: _incomeCtrl,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
+                                decimal: true,
+                              ),
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
                                 if (double.tryParse(v) == null) {
@@ -417,8 +419,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               controller: _incomeRaiseCtrl,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
+                                decimal: true,
+                              ),
                               suffix: '%',
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
@@ -435,8 +437,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               controller: _monthlyExpensesCtrl,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
+                                decimal: true,
+                              ),
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
                                 if (double.tryParse(v) == null) {
@@ -452,8 +454,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               controller: _inflationRateCtrl,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
+                                decimal: true,
+                              ),
                               suffix: '%',
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
@@ -466,7 +468,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                             // ── Section 3: Spouse (conditional) ───────────
                             if (_isMarried) ...[
                               const SizedBox(height: 32),
-                              _SectionLabel(
+                              const _SectionLabel(
                                 label: '03',
                                 title: 'SPOUSE DETAILS',
                               ),
@@ -506,8 +508,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 controller: _spouseIncomeCtrl,
                                 keyboardType:
                                     const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
+                                  decimal: true,
+                                ),
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
                                     if (double.tryParse(v) == null) {
@@ -524,8 +526,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 controller: _spouseIncomeRaiseCtrl,
                                 keyboardType:
                                     const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
+                                  decimal: true,
+                                ),
                                 suffix: '%',
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
@@ -554,7 +556,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                   children: [
                                     Row(
                                       children: [
-                                        Icon(
+                                        const Icon(
                                           Icons.warning_amber_rounded,
                                           color: AppColors.error,
                                           size: 16,
@@ -775,12 +777,11 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 18),
-          color: _isLoading
-              ? AppColors.green.withOpacity(0.5)
-              : AppColors.green,
+          color:
+              _isLoading ? AppColors.green.withOpacity(0.5) : AppColors.green,
           child: Center(
             child: _isLoading
-                ? SizedBox(
+                ? const SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(
@@ -868,9 +869,8 @@ class _StatusChip extends StatelessWidget {
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: selected
-              ? AppColors.green.withOpacity(0.12)
-              : Colors.transparent,
+          color:
+              selected ? AppColors.green.withOpacity(0.12) : Colors.transparent,
           border: Border.all(
             color: selected
                 ? AppColors.green
@@ -981,7 +981,7 @@ class _GreenField extends StatelessWidget {
               borderRadius: BorderRadius.zero,
               borderSide: BorderSide(color: AppColors.error.withOpacity(0.6)),
             ),
-            focusedErrorBorder: OutlineInputBorder(
+            focusedErrorBorder: const OutlineInputBorder(
               borderRadius: BorderRadius.zero,
               borderSide: BorderSide(color: AppColors.error, width: 1.5),
             ),
