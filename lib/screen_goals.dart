@@ -106,7 +106,9 @@ class _GoalsScreenState extends State<GoalsScreen> {
                         _buildRetirementCard(),
                         if (_retirementResult != null) ...[
                           const SizedBox(height: 20),
-                          _RetirementResultCard(data: _retirementResult!),
+                          _ApiResultCard(
+                              rawData: _retirementResult!,
+                              title: 'RETIREMENT PLAN RESULT'),
                         ],
 
                         const SizedBox(height: 28),
@@ -126,9 +128,10 @@ class _GoalsScreenState extends State<GoalsScreen> {
                         _buildGoalGrid(),
                         if (_lastOneTimeResult != null) ...[
                           const SizedBox(height: 28),
-                          _OneTimeResultCard(
-                              data: _lastOneTimeResult!,
-                              goalName: _lastOneTimeGoalName ?? 'GOAL'),
+                          _ApiResultCard(
+                              rawData: _lastOneTimeResult!,
+                              title:
+                                  '${_lastOneTimeGoalName ?? "GOAL"} — RESULT'),
                         ],
                       ],
                     ),
@@ -340,260 +343,213 @@ class _GoalCard extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── Smart Result Cards ─────────────────────────────────────────────────────────
+// ── Result Rendering (shared helpers duplicated for file isolation) ────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Formats a raw value intelligently: currency, percent, plain number, or string
-String _formatValue(String key, dynamic raw) {
-  if (raw == null) return '—';
-  final str = raw.toString().trim();
-  if (str.isEmpty || str == 'null') return '—';
-
-  // Already formatted (starts with currency symbol etc.)
-  if (str.startsWith('\$') || str.startsWith('₹') || str.startsWith('€'))
-    return str;
-
-  // Try numeric formatting
-  final num? n = num.tryParse(str);
-  if (n != null) {
-    final lk = key.toLowerCase();
-    // Percentage keys
-    if (lk.contains('pct') ||
-        lk.contains('rate') ||
-        lk.contains('return') ||
-        lk.contains('raise') ||
-        lk.contains('yield') ||
-        lk.contains('percent')) {
-      return '${n.toStringAsFixed(1)}%';
+Map<String, dynamic> _flattenResult(Map<String, dynamic> raw) {
+  final out = <String, dynamic>{};
+  raw.forEach((k, v) {
+    if (v is Map<String, dynamic>) {
+      v.forEach((ik, iv) => out[ik] = iv);
+    } else {
+      out[k] = v;
     }
-    // Large currency values
-    if (lk.contains('corpus') ||
-        lk.contains('amount') ||
-        lk.contains('income') ||
-        lk.contains('sip') ||
-        lk.contains('value') ||
-        lk.contains('savings') ||
-        lk.contains('expense') ||
-        lk.contains('cost') ||
-        lk.contains('fund') ||
-        lk.contains('target') ||
-        lk.contains('shortfall') ||
-        lk.contains('surplus')) {
-      if (n.abs() >= 10000000) {
-        return '\$${(n / 10000000).toStringAsFixed(2)}Cr';
-      } else if (n.abs() >= 100000) {
-        return '\$${(n / 100000).toStringAsFixed(2)}L';
-      } else if (n.abs() >= 1000) {
-        return '\$${(n / 1000).toStringAsFixed(1)}K';
-      }
-      return '\$${n.toStringAsFixed(0)}';
-    }
-    // Age / year keys
-    if (lk.contains('age') || lk.contains('year') || lk.contains('duration')) {
-      return n.toInt().toString();
-    }
-    // Generic number
-    return n % 1 == 0 ? n.toInt().toString() : n.toStringAsFixed(2);
-  }
-
-  // Boolean-style
-  if (str.toLowerCase() == 'true') return 'YES';
-  if (str.toLowerCase() == 'false') return 'NO';
-
-  return str;
+  });
+  return out;
 }
 
-// Converts snake_case key to readable label
-String _labelFor(String key) => key.replaceAll('_', ' ').toUpperCase();
-
-// Determines if a result row should be highlighted (primary outputs)
-bool _isHighlightKey(String key) {
+String _smartFmt(String key, dynamic raw) {
+  if (raw == null) return '—';
+  final s = raw.toString().trim();
+  if (s.isEmpty || s == 'null' || s == 'None') return '—';
+  final n = num.tryParse(s);
+  if (n == null) {
+    if (s.toLowerCase() == 'true') return 'YES';
+    if (s.toLowerCase() == 'false') return 'NO';
+    return s;
+  }
   final lk = key.toLowerCase();
-  return lk.contains('required') ||
-      lk.contains('monthly_sip') ||
-      lk.contains('target') ||
+  if (lk.contains('pct') ||
+      lk.contains('rate') ||
+      lk.contains('return') ||
+      lk.contains('percent') ||
+      lk.contains('raise') ||
+      lk.contains('yield')) {
+    return '${n.toStringAsFixed(1)}%';
+  }
+  if (lk.contains('age') ||
+      lk.contains('year') ||
+      lk.contains('duration') ||
+      lk.contains('period') ||
+      lk.contains('count')) {
+    return n.toInt().toString();
+  }
+  final abs = n.abs();
+  if (abs >= 10000000) return '₹${(n / 10000000).toStringAsFixed(2)} Cr';
+  if (abs >= 100000) return '₹${(n / 100000).toStringAsFixed(2)} L';
+  if (abs >= 1000) return '₹${(n / 1000).toStringAsFixed(1)} K';
+  if (abs > 0 && abs < 1) return n.toStringAsFixed(4);
+  return n % 1 == 0 ? n.toInt().toString() : n.toStringAsFixed(2);
+}
+
+String _labelFor(String key) => key.replaceAll('_', ' ').trim().toUpperCase();
+
+bool _isPrimaryKey(String key, dynamic value) {
+  final lk = key.toLowerCase();
+  final n = num.tryParse(value?.toString() ?? '');
+  if (n == null) return false;
+  if (lk.contains('inflation') ||
+      lk.contains('raise') ||
+      lk.contains('input') ||
+      lk == 'years' ||
+      lk == 'age') {
+    return false;
+  }
+  if (lk.contains('sip') ||
       lk.contains('corpus') ||
+      lk.contains('required') ||
+      lk.contains('monthly') ||
+      lk.contains('future') ||
+      lk.contains('value') ||
+      lk.contains('maturity') ||
+      lk.contains('target') ||
       lk.contains('shortfall') ||
       lk.contains('surplus') ||
-      lk.contains('recommended') ||
-      lk == 'sip' ||
-      lk == 'result' ||
-      lk == 'status';
+      lk.contains('saving') ||
+      lk.contains('result') ||
+      lk.contains('amount') ||
+      lk.contains('fund')) {
+    return true;
+  }
+  return n.abs() >= 1000;
 }
 
-// ── Retirement Result Card ─────────────────────────────────────────────────────
-class _RetirementResultCard extends StatelessWidget {
-  final Map<String, dynamic> data;
-  const _RetirementResultCard({required this.data});
+class _ApiResultCard extends StatelessWidget {
+  final Map<String, dynamic> rawData;
+  final String title;
+  const _ApiResultCard({required this.rawData, required this.title});
 
   @override
   Widget build(BuildContext context) {
-    // Separate highlighted (key outputs) from supporting rows
-    final highlighted =
-        data.entries.where((e) => _isHighlightKey(e.key)).toList();
-    final supporting = data.entries
-        .where((e) =>
-            !_isHighlightKey(e.key) &&
-            e.value != null &&
-            e.value.toString().isNotEmpty)
-        .toList();
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // Section label
-      Row(children: [
-        Container(width: 20, height: 1, color: AppColors.green),
-        const SizedBox(width: 10),
-        Text('RETIREMENT PLAN RESULT',
+    final data = _flattenResult(rawData);
+    if (data.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+            color: AppColors.blackCard,
+            border: Border.all(color: AppColors.green.withOpacity(0.15))),
+        child: Text('No result data.',
             style: TextStyle(
                 fontFamily: 'Courier',
-                fontSize: 10,
-                letterSpacing: 4,
-                color: AppColors.green.withOpacity(0.7))),
-      ]),
-      const SizedBox(height: 12),
-
-      // ── Hero metrics (highlighted keys) ───────────────────────────────────
-      if (highlighted.isNotEmpty) ...[
-        _buildHeroMetrics(highlighted),
-        const SizedBox(height: 12),
-      ],
-
-      // ── Supporting details ─────────────────────────────────────────────────
-      if (supporting.isNotEmpty)
-        Container(
-          decoration: BoxDecoration(
-              color: AppColors.blackCard,
-              border: Border.all(color: AppColors.green.withOpacity(0.12))),
-          child: Column(
-            children: supporting.asMap().entries.map((e) {
-              final isLast = e.key == supporting.length - 1;
-              return _ResultRow(
-                label: _labelFor(e.value.key),
-                value: _formatValue(e.value.key, e.value.value),
-                isLast: isLast,
-                highlight: false,
-              );
-            }).toList(),
-          ),
-        ),
-    ]);
-  }
-
-  Widget _buildHeroMetrics(List<MapEntry<String, dynamic>> entries) {
-    // Up to 2 per row
-    final List<Widget> rows = [];
-    for (int i = 0; i < entries.length; i += 2) {
-      final left = entries[i];
-      final right = i + 1 < entries.length ? entries[i + 1] : null;
-      rows.add(Row(children: [
-        Expanded(
-            child: _HeroMetricTile(
-                label: _labelFor(left.key),
-                value: _formatValue(left.key, left.value))),
-        const SizedBox(width: 12),
-        Expanded(
-            child: right != null
-                ? _HeroMetricTile(
-                    label: _labelFor(right.key),
-                    value: _formatValue(right.key, right.value))
-                : const SizedBox()),
-      ]));
-      if (i + 2 < entries.length) rows.add(const SizedBox(height: 12));
+                fontSize: 11,
+                color: AppColors.textMuted.withOpacity(0.4))),
+      );
     }
-    return Column(children: rows);
-  }
-}
-
-// ── One-Time Goal Result Card ──────────────────────────────────────────────────
-class _OneTimeResultCard extends StatelessWidget {
-  final Map<String, dynamic> data;
-  final String goalName;
-  const _OneTimeResultCard({required this.data, required this.goalName});
-
-  @override
-  Widget build(BuildContext context) {
-    final highlighted =
-        data.entries.where((e) => _isHighlightKey(e.key)).toList();
-    final supporting = data.entries
-        .where((e) =>
-            !_isHighlightKey(e.key) &&
-            e.value != null &&
-            e.value.toString().isNotEmpty)
-        .toList();
+    final primary =
+        data.entries.where((e) => _isPrimaryKey(e.key, e.value)).toList();
+    final secondary =
+        data.entries.where((e) => !_isPrimaryKey(e.key, e.value)).toList();
+    final heroes = primary.isNotEmpty
+        ? primary
+        : data.entries
+            .where((e) => num.tryParse(e.value?.toString() ?? '') != null)
+            .toList();
+    final details = primary.isNotEmpty
+        ? secondary
+        : data.entries
+            .where((e) => num.tryParse(e.value?.toString() ?? '') == null)
+            .toList();
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Container(width: 20, height: 1, color: AppColors.green),
         const SizedBox(width: 10),
         Expanded(
-            child: Text('${goalName.toUpperCase()} — RESULT',
+            child: Text(title,
                 style: TextStyle(
                     fontFamily: 'Courier',
                     fontSize: 10,
                     letterSpacing: 4,
                     color: AppColors.green.withOpacity(0.7)))),
       ]),
-      const SizedBox(height: 12),
-      if (highlighted.isNotEmpty) ...[
-        Column(
-          children: [
-            for (int i = 0; i < highlighted.length; i += 2)
-              Padding(
-                padding: EdgeInsets.only(
-                    bottom: i + 2 < highlighted.length ? 12 : 0),
-                child: Row(children: [
-                  Expanded(
-                      child: _HeroMetricTile(
-                          label: _labelFor(highlighted[i].key),
-                          value: _formatValue(
-                              highlighted[i].key, highlighted[i].value))),
-                  const SizedBox(width: 12),
-                  Expanded(
-                      child: i + 1 < highlighted.length
-                          ? _HeroMetricTile(
-                              label: _labelFor(highlighted[i + 1].key),
-                              value: _formatValue(highlighted[i + 1].key,
-                                  highlighted[i + 1].value))
-                          : const SizedBox()),
-                ]),
-              ),
-          ],
-        ),
-        const SizedBox(height: 12),
+      const SizedBox(height: 16),
+      if (heroes.isNotEmpty) ...[
+        ...List.generate((heroes.length / 2).ceil(), (i) {
+          final left = heroes[i * 2];
+          final right = (i * 2 + 1 < heroes.length) ? heroes[i * 2 + 1] : null;
+          return Padding(
+            padding: EdgeInsets.only(
+                bottom: i < (heroes.length / 2).ceil() - 1 ? 10 : 0),
+            child: Row(children: [
+              Expanded(
+                  child: _ResultHeroTile(
+                      label: _labelFor(left.key),
+                      value: _smartFmt(left.key, left.value))),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: right != null
+                      ? _ResultHeroTile(
+                          label: _labelFor(right.key),
+                          value: _smartFmt(right.key, right.value))
+                      : const SizedBox()),
+            ]),
+          );
+        }),
+        const SizedBox(height: 14),
       ],
-      if (supporting.isNotEmpty)
+      if (details.isNotEmpty)
         Container(
           decoration: BoxDecoration(
               color: AppColors.blackCard,
-              border: Border.all(color: AppColors.green.withOpacity(0.12))),
+              border: Border.all(color: AppColors.green.withOpacity(0.1))),
           child: Column(
-            children: supporting
-                .asMap()
-                .entries
-                .map((e) => _ResultRow(
-                      label: _labelFor(e.value.key),
-                      value: _formatValue(e.value.key, e.value.value),
-                      isLast: e.key == supporting.length - 1,
-                      highlight: false,
-                    ))
-                .toList(),
+            children: details.asMap().entries.map((e) {
+              final isLast = e.key == details.length - 1;
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                decoration: isLast
+                    ? null
+                    : BoxDecoration(
+                        border: Border(
+                            bottom: BorderSide(
+                                color: AppColors.green.withOpacity(0.06)))),
+                child: Row(children: [
+                  Expanded(
+                      flex: 3,
+                      child: Text(_labelFor(e.value.key),
+                          style: TextStyle(
+                              fontFamily: 'Courier',
+                              fontSize: 9,
+                              letterSpacing: 1,
+                              color: AppColors.textMuted.withOpacity(0.35)))),
+                  Text(_smartFmt(e.value.key, e.value.value),
+                      style: TextStyle(
+                          fontFamily: 'Courier',
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textMuted.withOpacity(0.75))),
+                ]),
+              );
+            }).toList(),
           ),
         ),
     ]);
   }
 }
 
-// ── Hero Metric Tile ───────────────────────────────────────────────────────────
-class _HeroMetricTile extends StatelessWidget {
+class _ResultHeroTile extends StatelessWidget {
   final String label, value;
-  const _HeroMetricTile({required this.label, required this.value});
-
+  const _ResultHeroTile({required this.label, required this.value});
   @override
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AppColors.blackCard,
-          border: Border.all(color: AppColors.green.withOpacity(0.35)),
+          border: Border.all(color: AppColors.green.withOpacity(0.4)),
+          boxShadow: [
+            BoxShadow(color: AppColors.green.withOpacity(0.04), blurRadius: 12)
+          ],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label,
@@ -601,67 +557,28 @@ class _HeroMetricTile extends StatelessWidget {
                   fontFamily: 'Courier',
                   fontSize: 8,
                   letterSpacing: 2,
-                  color: AppColors.textMuted.withOpacity(0.45))),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: TextStyle(
-                fontFamily: 'Courier',
-                fontSize: 18,
-                fontWeight: FontWeight.w900,
-                color: AppColors.green,
-                shadows: [
-                  Shadow(color: AppColors.green.withOpacity(0.4), blurRadius: 8)
-                ]),
+                  color: AppColors.textMuted.withOpacity(0.4))),
+          const SizedBox(height: 10),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value,
+                style: TextStyle(
+                  fontFamily: 'Courier',
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.green,
+                  shadows: [
+                    Shadow(
+                        color: AppColors.green.withOpacity(0.35),
+                        blurRadius: 10)
+                  ],
+                )),
           ),
         ]),
       );
 }
 
-// ── Result Row ─────────────────────────────────────────────────────────────────
-class _ResultRow extends StatelessWidget {
-  final String label, value;
-  final bool isLast, highlight;
-  const _ResultRow(
-      {required this.label,
-      required this.value,
-      required this.isLast,
-      this.highlight = false});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: isLast
-            ? null
-            : BoxDecoration(
-                border: Border(
-                    bottom:
-                        BorderSide(color: AppColors.green.withOpacity(0.07)))),
-        child: Row(children: [
-          Expanded(
-              flex: 3,
-              child: Text(label,
-                  style: TextStyle(
-                      fontFamily: 'Courier',
-                      fontSize: 9,
-                      letterSpacing: 1,
-                      color: AppColors.textMuted.withOpacity(0.4)))),
-          Text(
-            value,
-            style: TextStyle(
-              fontFamily: 'Courier',
-              fontSize: highlight ? 13 : 11,
-              fontWeight: highlight ? FontWeight.w900 : FontWeight.bold,
-              color: highlight
-                  ? AppColors.green
-                  : AppColors.textMuted.withOpacity(0.8),
-            ),
-          ),
-        ]),
-      );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 // ── Retirement Goal Bottom Sheet ───────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 class _RetirementGoalSheet extends StatefulWidget {
@@ -755,7 +672,7 @@ class _RetirementGoalSheetState extends State<_RetirementGoalSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                _SheetHeader(
+                const _SheetHeader(
                     title: 'RETIREMENT GOAL',
                     icon: Icons.beach_access_outlined),
                 const SizedBox(height: 24),
@@ -790,7 +707,7 @@ class _RetirementGoalSheetState extends State<_RetirementGoalSheet> {
                 const SizedBox(height: 20),
 
                 // ── Existing savings ─────────────────────────────────────
-                _SheetSectionDivider(label: 'EXISTING SAVINGS'),
+                const _SheetSectionDivider(label: 'EXISTING SAVINGS'),
                 const SizedBox(height: 12),
                 _SheetField(
                     label: 'EXISTING CORPUS',
@@ -983,7 +900,7 @@ class _OneTimeGoalSheetState extends State<_OneTimeGoalSheet> {
                     }),
                 const SizedBox(height: 20),
 
-                _SheetSectionDivider(label: 'EXISTING SAVINGS'),
+                const _SheetSectionDivider(label: 'EXISTING SAVINGS'),
                 const SizedBox(height: 12),
                 _SheetField(
                     label: 'EXISTING SAVINGS FOR THIS GOAL',
@@ -1194,7 +1111,7 @@ class _SheetField extends StatelessWidget {
                   borderRadius: BorderRadius.zero,
                   borderSide:
                       BorderSide(color: AppColors.error.withOpacity(0.6))),
-              focusedErrorBorder: OutlineInputBorder(
+              focusedErrorBorder: const OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
                   borderSide: BorderSide(color: AppColors.error)),
               errorStyle: TextStyle(

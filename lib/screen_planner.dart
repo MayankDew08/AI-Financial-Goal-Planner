@@ -410,12 +410,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
             const SizedBox(height: 28),
             const _SectionLabel(label: 'RESULT'),
             const SizedBox(height: 16),
-            _CalcResultCard(data: _sipResult!, primaryKeys: const [
-              'monthly_sip',
-              'sip',
-              'required_sip',
-              'monthly_investment'
-            ]),
+            _ApiResultCard(rawData: _sipResult!, title: 'MONTHLY SIP REQUIRED'),
           ],
         ],
       );
@@ -499,12 +494,8 @@ class _PlannerScreenState extends State<PlannerScreen> {
             const SizedBox(height: 28),
             const _SectionLabel(label: 'RESULT'),
             const SizedBox(height: 16),
-            _CalcResultCard(data: _fvResult!, primaryKeys: const [
-              'future_value',
-              'corpus',
-              'total_value',
-              'maturity_value'
-            ]),
+            _ApiResultCard(
+                rawData: _fvResult!, title: 'PROJECTED FUTURE VALUE'),
           ],
         ],
       );
@@ -604,8 +595,6 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
           if (_allocationResult != null) ...[
             const SizedBox(height: 28),
-            const _SectionLabel(label: 'SUGGESTED ALLOCATION'),
-            const SizedBox(height: 16),
             _AllocationResultCard(data: _allocationResult!),
           ],
         ],
@@ -613,112 +602,217 @@ class _PlannerScreenState extends State<PlannerScreen> {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── Result Cards ───────────────────────────────────────────────────────────────
+// ── Shared Smart Result Card ───────────────────────────────────────────────────
+// Handles any API response shape: flat, nested, or wrapped.
+// First numeric field → hero tile. All others → detail rows.
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Generic calculation result — highlights primary keys as hero tiles
-class _CalcResultCard extends StatelessWidget {
-  final Map<String, dynamic> data;
-  final List<String> primaryKeys; // keys to show as hero tiles
-
-  const _CalcResultCard({required this.data, required this.primaryKeys});
-
-  String _fmt(String key, dynamic raw) {
-    if (raw == null) return '—';
-    final s = raw.toString().trim();
-    if (s.isEmpty || s == 'null') return '—';
-    final n = num.tryParse(s);
-    if (n == null) return s;
-    final lk = key.toLowerCase();
-    if (lk.contains('pct') ||
-        lk.contains('rate') ||
-        lk.contains('return') ||
-        lk.contains('percent')) {
-      return '${n.toStringAsFixed(1)}%';
+// Flattens nested maps one level deep (e.g. {"result": {"sip": 5000}} → {"sip": 5000})
+Map<String, dynamic> _flattenResult(Map<String, dynamic> raw) {
+  final out = <String, dynamic>{};
+  raw.forEach((k, v) {
+    if (v is Map<String, dynamic>) {
+      v.forEach((ik, iv) => out[ik] = iv);
+    } else {
+      out[k] = v;
     }
-    // Currency
-    if (n.abs() >= 10000000) return '\$${(n / 10000000).toStringAsFixed(2)}Cr';
-    if (n.abs() >= 100000) return '\$${(n / 100000).toStringAsFixed(2)}L';
-    if (n.abs() >= 1000) return '\$${(n / 1000).toStringAsFixed(1)}K';
-    return '\$${n.toStringAsFixed(0)}';
-  }
+  });
+  return out;
+}
 
-  String _label(String key) => key.replaceAll('_', ' ').toUpperCase();
+// Smart formatter: detects percent, large currency, plain number
+String _smartFmt(String key, dynamic raw) {
+  if (raw == null) return '—';
+  final s = raw.toString().trim();
+  if (s.isEmpty || s == 'null' || s == 'None') return '—';
+  final n = num.tryParse(s);
+  if (n == null) {
+    if (s.toLowerCase() == 'true') return 'YES';
+    if (s.toLowerCase() == 'false') return 'NO';
+    return s;
+  }
+  final lk = key.toLowerCase();
+  // Percentage
+  if (lk.contains('pct') ||
+      lk.contains('rate') ||
+      lk.contains('return') ||
+      lk.contains('percent') ||
+      lk.contains('raise') ||
+      lk.contains('yield')) {
+    return '${n.toStringAsFixed(1)}%';
+  }
+  // Age / year / count — plain int
+  if (lk.contains('age') ||
+      lk.contains('year') ||
+      lk.contains('duration') ||
+      lk.contains('period') ||
+      lk.contains('count')) {
+    return n.toInt().toString();
+  }
+  // Currency — everything else numeric
+  final abs = n.abs();
+  if (abs >= 10000000) return '₹${(n / 10000000).toStringAsFixed(2)} Cr';
+  if (abs >= 100000) return '₹${(n / 100000).toStringAsFixed(2)} L';
+  if (abs >= 1000) return '₹${(n / 1000).toStringAsFixed(1)} K';
+  if (abs > 0 && abs < 1) return n.toStringAsFixed(4); // small decimals
+  return n % 1 == 0 ? n.toInt().toString() : n.toStringAsFixed(2);
+}
+
+String _keyLabel(String key) => key.replaceAll('_', ' ').trim().toUpperCase();
+
+// Decides which keys are "primary" outputs worth showing as hero tiles.
+// Strategy: any key whose value is a large number and whose name suggests
+// it's an output (not an input echo) gets hero treatment.
+bool _isPrimaryKey(String key, dynamic value) {
+  final lk = key.toLowerCase();
+  final n = num.tryParse(value?.toString() ?? '');
+  // Must be numeric
+  if (n == null) return false;
+  // Input-echo keys we deprioritise
+  if (lk.contains('inflation') ||
+      lk.contains('raise') ||
+      lk.contains('input') ||
+      lk == 'years' ||
+      lk == 'age' ||
+      lk == 'goal_amount' ||
+      lk == 'years_to_goal') {
+    return false;
+  }
+  // Strong output signal
+  if (lk.contains('sip') ||
+      lk.contains('corpus') ||
+      lk.contains('required') ||
+      lk.contains('monthly') ||
+      lk.contains('future') ||
+      lk.contains('value') ||
+      lk.contains('maturity') ||
+      lk.contains('target') ||
+      lk.contains('shortfall') ||
+      lk.contains('surplus') ||
+      lk.contains('saving') ||
+      lk.contains('investment') ||
+      lk.contains('result') ||
+      lk.contains('amount') ||
+      lk.contains('fund')) {
+    return true;
+  }
+  // Large number = likely an output
+  return n.abs() >= 1000;
+}
+
+class _ApiResultCard extends StatelessWidget {
+  final Map<String, dynamic> rawData;
+  final String title;
+  const _ApiResultCard({required this.rawData, required this.title});
 
   @override
   Widget build(BuildContext context) {
-    // Split hero vs supporting
-    final heroEntries = data.entries
-        .where((e) => primaryKeys
-            .any((k) => e.key.toLowerCase().contains(k.toLowerCase())))
-        .toList();
-    final supportEntries = data.entries
-        .where((e) => !primaryKeys
-            .any((k) => e.key.toLowerCase().contains(k.toLowerCase())))
-        .where((e) => e.value != null && e.value.toString().isNotEmpty)
-        .toList();
+    final data = _flattenResult(rawData);
+    if (data.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.blackCard,
+          border: Border.all(color: AppColors.green.withOpacity(0.15)),
+        ),
+        child: Text('No result data returned.',
+            style: TextStyle(
+                fontFamily: 'Courier',
+                fontSize: 11,
+                color: AppColors.textMuted.withOpacity(0.4))),
+      );
+    }
+
+    final primary =
+        data.entries.where((e) => _isPrimaryKey(e.key, e.value)).toList();
+    final secondary =
+        data.entries.where((e) => !_isPrimaryKey(e.key, e.value)).toList();
+
+    // If nothing matched primary heuristic, treat ALL numeric entries as primary
+    final heroes = primary.isNotEmpty
+        ? primary
+        : data.entries
+            .where((e) => num.tryParse(e.value?.toString() ?? '') != null)
+            .toList();
+    final details = primary.isNotEmpty
+        ? secondary
+        : data.entries
+            .where((e) => num.tryParse(e.value?.toString() ?? '') == null)
+            .toList();
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // Hero tiles
-      if (heroEntries.isNotEmpty) ...[
-        ...List.generate((heroEntries.length / 2).ceil(), (i) {
-          final left = heroEntries[i * 2];
-          final right =
-              i * 2 + 1 < heroEntries.length ? heroEntries[i * 2 + 1] : null;
+      // ── Section label ──────────────────────────────────────────────────────
+      Row(children: [
+        Container(width: 20, height: 1, color: AppColors.green),
+        const SizedBox(width: 10),
+        Text(title,
+            style: TextStyle(
+                fontFamily: 'Courier',
+                fontSize: 10,
+                letterSpacing: 4,
+                color: AppColors.green.withOpacity(0.7))),
+      ]),
+      const SizedBox(height: 16),
+
+      // ── Hero tiles (primary outputs) ───────────────────────────────────────
+      if (heroes.isNotEmpty) ...[
+        ...List.generate((heroes.length / 2).ceil(), (i) {
+          final left = heroes[i * 2];
+          final right = (i * 2 + 1 < heroes.length) ? heroes[i * 2 + 1] : null;
           return Padding(
             padding: EdgeInsets.only(
-                bottom: i < (heroEntries.length / 2).ceil() - 1 ? 12 : 0),
+                bottom: i < (heroes.length / 2).ceil() - 1 ? 10 : 0),
             child: Row(children: [
               Expanded(
-                  child: _HeroTile(
-                      label: _label(left.key),
-                      value: _fmt(left.key, left.value))),
-              const SizedBox(width: 12),
+                  child: _ResultHeroTile(
+                      label: _keyLabel(left.key),
+                      value: _smartFmt(left.key, left.value))),
+              const SizedBox(width: 10),
               Expanded(
                   child: right != null
-                      ? _HeroTile(
-                          label: _label(right.key),
-                          value: _fmt(right.key, right.value))
+                      ? _ResultHeroTile(
+                          label: _keyLabel(right.key),
+                          value: _smartFmt(right.key, right.value))
                       : const SizedBox()),
             ]),
           );
         }),
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
       ],
 
-      // Supporting rows
-      if (supportEntries.isNotEmpty)
+      // ── Detail rows (secondary / input-echo fields) ────────────────────────
+      if (details.isNotEmpty)
         Container(
           decoration: BoxDecoration(
               color: AppColors.blackCard,
-              border: Border.all(color: AppColors.green.withOpacity(0.12))),
+              border: Border.all(color: AppColors.green.withOpacity(0.1))),
           child: Column(
-            children: supportEntries.asMap().entries.map((e) {
-              final isLast = e.key == supportEntries.length - 1;
+            children: details.asMap().entries.map((e) {
+              final isLast = e.key == details.length - 1;
               return Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
                 decoration: isLast
                     ? null
                     : BoxDecoration(
                         border: Border(
                             bottom: BorderSide(
-                                color: AppColors.green.withOpacity(0.07)))),
+                                color: AppColors.green.withOpacity(0.06)))),
                 child: Row(children: [
                   Expanded(
                       flex: 3,
-                      child: Text(_label(e.value.key),
+                      child: Text(_keyLabel(e.value.key),
                           style: TextStyle(
                               fontFamily: 'Courier',
                               fontSize: 9,
                               letterSpacing: 1,
-                              color: AppColors.textMuted.withOpacity(0.4)))),
-                  Text(_fmt(e.value.key, e.value.value),
+                              color: AppColors.textMuted.withOpacity(0.35)))),
+                  Text(_smartFmt(e.value.key, e.value.value),
                       style: TextStyle(
                           fontFamily: 'Courier',
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
-                          color: AppColors.textMuted.withOpacity(0.85))),
+                          color: AppColors.textMuted.withOpacity(0.75))),
                 ]),
               );
             }).toList(),
@@ -728,136 +822,22 @@ class _CalcResultCard extends StatelessWidget {
   }
 }
 
-// Allocation result — renders equity/debt split visually with a bar
-class _AllocationResultCard extends StatelessWidget {
-  final Map<String, dynamic> data;
-  const _AllocationResultCard({required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    // Try to find equity_pct and debt_pct in result
-    double equityPct = 0;
-    double debtPct = 0;
-
-    data.forEach((k, v) {
-      final lk = k.toLowerCase();
-      final n = num.tryParse(v?.toString() ?? '')?.toDouble() ?? 0;
-      if (lk.contains('equity')) equityPct = n > 1 ? n : n * 100;
-      if (lk.contains('debt') || lk.contains('bond') || lk.contains('fixed')) {
-        debtPct = n > 1 ? n : n * 100;
-      }
-    });
-
-    // Fallback: if only equity found, infer debt
-    if (equityPct > 0 && debtPct == 0) debtPct = 100 - equityPct;
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // Visual bar
-      if (equityPct > 0) ...[
-        Row(children: [
-          Expanded(
-            flex: equityPct.round(),
-            child: Container(
-              height: 10,
-              color: AppColors.green,
-            ),
-          ),
-          Expanded(
-            flex: debtPct.round(),
-            child: Container(
-              height: 10,
-              color: AppColors.textMuted.withOpacity(0.2),
-            ),
-          ),
-        ]),
-        const SizedBox(height: 12),
-        Row(children: [
-          _AllocLegend(color: AppColors.green, label: 'EQUITY', pct: equityPct),
-          const SizedBox(width: 24),
-          _AllocLegend(
-              color: AppColors.textMuted.withOpacity(0.4),
-              label: 'DEBT / BONDS',
-              pct: debtPct),
-        ]),
-        const SizedBox(height: 16),
-      ],
-
-      // All raw fields
-      Container(
-        decoration: BoxDecoration(
-            color: AppColors.blackCard,
-            border: Border.all(color: AppColors.green.withOpacity(0.12))),
-        child: Column(
-          children: data.entries
-              .where((e) => e.value != null && e.value.toString().isNotEmpty)
-              .toList()
-              .asMap()
-              .entries
-              .map((e) {
-            final isLast = e.key == data.entries.length - 1;
-            final key = e.value.key.replaceAll('_', ' ').toUpperCase();
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: isLast
-                  ? null
-                  : BoxDecoration(
-                      border: Border(
-                          bottom: BorderSide(
-                              color: AppColors.green.withOpacity(0.07)))),
-              child: Row(children: [
-                Expanded(
-                    flex: 3,
-                    child: Text(key,
-                        style: TextStyle(
-                            fontFamily: 'Courier',
-                            fontSize: 9,
-                            letterSpacing: 1,
-                            color: AppColors.textMuted.withOpacity(0.4)))),
-                Text(e.value.value.toString(),
-                    style: const TextStyle(
-                        fontFamily: 'Courier',
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.green)),
-              ]),
-            );
-          }).toList(),
-        ),
-      ),
-    ]);
-  }
-}
-
-class _AllocLegend extends StatelessWidget {
-  final Color color;
-  final String label;
-  final double pct;
-  const _AllocLegend(
-      {required this.color, required this.label, required this.pct});
-
-  @override
-  Widget build(BuildContext context) => Row(children: [
-        Container(width: 10, height: 10, color: color),
-        const SizedBox(width: 8),
-        Text('$label  ${pct.toStringAsFixed(0)}%',
-            style: TextStyle(
-                fontFamily: 'Courier',
-                fontSize: 10,
-                letterSpacing: 1,
-                color: AppColors.textMuted.withOpacity(0.6))),
-      ]);
-}
-
-class _HeroTile extends StatelessWidget {
+class _ResultHeroTile extends StatelessWidget {
   final String label, value;
-  const _HeroTile({required this.label, required this.value});
+  const _ResultHeroTile({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AppColors.blackCard,
-          border: Border.all(color: AppColors.green.withOpacity(0.35)),
+          border: Border.all(color: AppColors.green.withOpacity(0.4)),
+          boxShadow: [
+            BoxShadow(
+                color: AppColors.green.withOpacity(0.04),
+                blurRadius: 12,
+                spreadRadius: 1)
+          ],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label,
@@ -865,22 +845,161 @@ class _HeroTile extends StatelessWidget {
                   fontFamily: 'Courier',
                   fontSize: 8,
                   letterSpacing: 2,
-                  color: AppColors.textMuted.withOpacity(0.45))),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: TextStyle(
-              fontFamily: 'Courier',
-              fontSize: 20,
-              fontWeight: FontWeight.w900,
-              color: AppColors.green,
-              shadows: [
-                Shadow(color: AppColors.green.withOpacity(0.4), blurRadius: 8)
-              ],
-            ),
+                  color: AppColors.textMuted.withOpacity(0.4))),
+          const SizedBox(height: 10),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value,
+                style: TextStyle(
+                  fontFamily: 'Courier',
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.green,
+                  shadows: [
+                    Shadow(
+                        color: AppColors.green.withOpacity(0.35),
+                        blurRadius: 10)
+                  ],
+                )),
           ),
         ]),
       );
+}
+
+// Allocation gets its own visual treatment with equity/debt bar
+class _AllocationResultCard extends StatelessWidget {
+  final Map<String, dynamic> data;
+  const _AllocationResultCard({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final flat = _flattenResult(data);
+    double equityPct = 0;
+    double debtPct = 0;
+
+    flat.forEach((k, v) {
+      final lk = k.toLowerCase();
+      final n = num.tryParse(v?.toString() ?? '')?.toDouble() ?? 0;
+      if (lk.contains('equity')) equityPct = n > 1 ? n : n * 100;
+      if (lk.contains('debt') ||
+          lk.contains('bond') ||
+          lk.contains('fixed') ||
+          lk.contains('large') && lk.contains('cap') == false) {
+        debtPct = n > 1 ? n : n * 100;
+      }
+    });
+    if (equityPct > 0 && debtPct == 0) debtPct = 100 - equityPct;
+    if (equityPct == 0 && debtPct == 0) {
+      // Fallback: just show raw data
+      return _ApiResultCard(rawData: data, title: 'SUGGESTED ALLOCATION');
+    }
+
+    final eqInt = equityPct.round().clamp(1, 99);
+    final dtInt = (100 - eqInt).clamp(1, 99);
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Label
+      Row(children: [
+        Container(width: 20, height: 1, color: AppColors.green),
+        const SizedBox(width: 10),
+        Text('SUGGESTED ALLOCATION',
+            style: TextStyle(
+                fontFamily: 'Courier',
+                fontSize: 10,
+                letterSpacing: 4,
+                color: AppColors.green.withOpacity(0.7))),
+      ]),
+      const SizedBox(height: 16),
+
+      // Bar
+      ClipRRect(
+        child: Row(children: [
+          Expanded(
+              flex: eqInt,
+              child: Container(
+                height: 12,
+                color: AppColors.green,
+              )),
+          Expanded(
+              flex: dtInt,
+              child: Container(
+                height: 12,
+                color: AppColors.textMuted.withOpacity(0.18),
+              )),
+        ]),
+      ),
+      const SizedBox(height: 14),
+
+      // Legend tiles
+      Row(children: [
+        Expanded(child: _ResultHeroTile(label: 'EQUITY', value: '$eqInt%')),
+        const SizedBox(width: 10),
+        Expanded(
+            child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.blackCard,
+            border: Border.all(color: AppColors.green.withOpacity(0.12)),
+          ),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('DEBT / BONDS',
+                style: TextStyle(
+                    fontFamily: 'Courier',
+                    fontSize: 8,
+                    letterSpacing: 2,
+                    color: AppColors.textMuted.withOpacity(0.4))),
+            const SizedBox(height: 10),
+            Text('$dtInt%',
+                style: TextStyle(
+                    fontFamily: 'Courier',
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.textMuted.withOpacity(0.65))),
+          ]),
+        )),
+      ]),
+      const SizedBox(height: 14),
+
+      // All fields as detail rows
+      Container(
+        decoration: BoxDecoration(
+            color: AppColors.blackCard,
+            border: Border.all(color: AppColors.green.withOpacity(0.1))),
+        child: Column(
+          children: flat.entries.toList().asMap().entries.map((e) {
+            final isLast = e.key == flat.length - 1;
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+              decoration: isLast
+                  ? null
+                  : BoxDecoration(
+                      border: Border(
+                          bottom: BorderSide(
+                              color: AppColors.green.withOpacity(0.06)))),
+              child: Row(children: [
+                Expanded(
+                    flex: 3,
+                    child: Text(_keyLabel(e.value.key),
+                        style: TextStyle(
+                            fontFamily: 'Courier',
+                            fontSize: 9,
+                            letterSpacing: 1,
+                            color: AppColors.textMuted.withOpacity(0.35)))),
+                Text(_smartFmt(e.value.key, e.value.value),
+                    style: TextStyle(
+                        fontFamily: 'Courier',
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.green.withOpacity(0.8))),
+              ]),
+            );
+          }).toList(),
+        ),
+      ),
+    ]);
+  }
 }
 
 // ── Profile Snapshot (shown on SIP tab for context) ───────────────────────────

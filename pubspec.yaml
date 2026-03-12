@@ -18,22 +18,21 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  flutter_lints: ^4.0.0   # ^6.0.0 does not exist; latest stable is 4.x
-  flutter_launcher_icons: ^0.13.1  # correct package name (was flutter_dynamic_launcher_icon)
+  flutter_lints: ^6.0.0   # ^6.0.0 does not exist; latest stable is 4.x
+  flutter_launcher_icons: ^0.14.4  # correct package name (was flutter_dynamic_launcher_icon)
 
 # ── Launcher icon config (read by flutter_launcher_icons) ────────────────────
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/finance_logo.png"
+  image_path: "assets/verdex_icon.png"
 
 # ── Flutter section ───────────────────────────────────────────────────────────
 flutter:
   uses-material-design: true
 
   assets:
-    - assets/finance_logo.png   # required so the logo file is bundled
-
+    - assets/verdex_icon.png
   # fonts:
   #   - family: Courier
   #     fonts:

@@ -82,7 +82,9 @@ class _AuthGateState extends State<AuthGate>
         final parts = jwt.split('.');
         if (parts.length == 3) {
           String payload = parts[1];
-          while (payload.length % 4 != 0) payload += '=';
+          while (payload.length % 4 != 0) {
+            payload += '=';
+          }
           final decoded = String.fromCharCodes(
             base64Url.decode(payload.replaceAll('-', '+').replaceAll('_', '/')),
           );
@@ -128,8 +130,9 @@ class _AuthGateState extends State<AuthGate>
       if (mounted) setState(() => _errorMsg = e.message);
     } catch (e) {
       // FIX 3: was bare setState — now guarded
-      if (mounted)
+      if (mounted) {
         setState(() => _errorMsg = 'Unexpected error: ${e.toString()}');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
