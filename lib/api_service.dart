@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 // ── Base URL — swap for your deployed backend ─────────────────────────────────
-const String kBaseUrl = 'https://your-api-domain.com';
+const String kBaseUrl = 'https://ai-financial-goal-planner.onrender.com';
 
 // ── API Service (singleton) ───────────────────────────────────────────────────
 // Usage:
@@ -107,9 +107,8 @@ class ApiService {
 
     final data = _handle(response);
     final t = data['access_token'] as String?;
-    if (t == null) {
+    if (t == null)
       throw const ApiException('No access_token in login response');
-    }
     token = t;
     return t;
   }
@@ -157,10 +156,9 @@ class ApiService {
   // Call fetchProfile() first, then this converts it to the Flutter model.
   UserProfileFromApi buildUserProfile() {
     final p = cachedProfile;
-    if (p == null) {
+    if (p == null)
       throw const ApiException(
           'Profile not loaded. Call fetchProfile() first.');
-    }
 
     return UserProfileFromApi(
       id: p['id']?.toString() ?? '',
@@ -298,11 +296,25 @@ class ApiService {
         bodyStart.startsWith('<!') ||
         bodyStart.startsWith('<html');
 
-    // HTML response = server is waking up (Render free tier cold start)
-    if (isHtml) {
+    // HTML on 5xx = Render cold start / server waking up
+    if (isHtml && response.statusCode >= 500) {
       throw ApiException(
         'Server is starting up. Please wait ~30 seconds and try again.'
         ' (Render cold start — status ${response.statusCode})',
+      );
+    }
+
+    // HTML on 2xx = wrong URL or redirect — show what we actually hit
+    if (isHtml && response.statusCode >= 200 && response.statusCode < 300) {
+      final snippet = response.body
+          .replaceAll(RegExp(r'<[^>]+>'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      final preview =
+          snippet.length > 120 ? snippet.substring(0, 120) : snippet;
+      throw ApiException(
+        '[${response.statusCode}] Server returned HTML — possible wrong API URL or redirect.\n'
+        'Preview: $preview',
       );
     }
 
