@@ -1,6 +1,7 @@
 import os
+from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -37,6 +38,19 @@ def _get_database_url() -> str:
         or os.getenv("DATABASE_URL")
         or os.getenv("SUPABASE_DB_URL")
     )
+
+    # In local development, prefer the repository .env values so a stale shell
+    # environment variable does not override the test database configured in the repo.
+    if not _running_in_container():
+        env_path = Path(__file__).resolve().parents[1] / ".env"
+        local_env = dotenv_values(env_path)
+        database_url = (
+            local_env.get("SQLALCHEMY_DATABASE_URL")
+            or local_env.get("DATABASE_URL")
+            or local_env.get("SUPABASE_DB_URL")
+            or database_url
+        )
+
     if not database_url:
         raise RuntimeError("SQLALCHEMY_DATABASE_URL is not set")
 

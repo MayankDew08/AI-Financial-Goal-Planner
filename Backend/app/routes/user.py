@@ -6,6 +6,7 @@ from app.models.db import User
 from app.schemas.user import CreateUser, UpdateUser
 from app.services.utils import hash_password
 from typing import Optional
+from pydantic import ValidationError
 
 router = APIRouter(prefix="/user", tags=["user"])
 
@@ -14,17 +15,24 @@ def _serialize_user(user: User) -> dict:
     return {
         "id": user.id,
         "name": user.full_name,
+        "full_name": user.full_name,
         "email": user.email,
         "phone_number": user.phone_number,
+        "phone": user.phone_number,
         "marital_status": user.marital_status,
         "age": user.age,
         "current_income": user.current_income,
         "income_raise_pct": user.income_raise_pct,
         "current_monthly_expenses": user.current_monthly_expenses,
+        "monthly_expenses": user.current_monthly_expenses,
         "inflation_rate": user.inflation_rate,
         "spouse_age": user.spouse_age,
         "spouse_income": user.spouse_income,
         "spouse_income_raise_pct": user.spouse_income_raise_pct,
+        "pre_retirement_return": user.pre_retirement_return,
+        "post_retirement_return": user.post_retirement_return,
+        "savings_floor_pct": user.savings_pct,
+        "buffer_pct": user.buffer_pct,
         "is_verified": user.is_verified,
         "is_active": user.is_active,
         "onboarding_complete": user.onboarding_complete,
@@ -49,21 +57,25 @@ def create_user(
     spouse_income_raise_pct: Optional[float] = Form(None, ge=0, le=50),
     db: Session = Depends(get_db),
 ):
-    data = CreateUser(
-        name=name,
-        email=email,
-        phone_number=phone_number,
-        password=password,
-        current_monthly_expenses=current_monthly_expenses,
-        inflation_rate=inflation_rate,
-        marital_status=marital_status,
-        age=age,
-        current_income=current_income,
-        income_raise_pct=income_raise_pct,
-        spouse_age=spouse_age,
-        spouse_income=spouse_income,
-        spouse_income_raise_pct=spouse_income_raise_pct,
-    )
+    try:
+        data = CreateUser(
+            name=name,
+            email=email,
+            phone_number=phone_number,
+            password=password,
+            current_monthly_expenses=current_monthly_expenses,
+            inflation_rate=inflation_rate,
+            marital_status=marital_status,
+            age=age,
+            current_income=current_income,
+            income_raise_pct=income_raise_pct,
+            spouse_age=spouse_age,
+            spouse_income=spouse_income,
+            spouse_income_raise_pct=spouse_income_raise_pct,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
     existing = db.query(User).filter(User.email == data.email).first()
     if existing:
         raise HTTPException(status_code=409, detail="User with this email already exists")
@@ -112,6 +124,12 @@ def update_user(
     spouse_age: Optional[int] = Form(None, ge=18, le=80),
     spouse_income: Optional[float] = Form(None, ge=0),
     spouse_income_raise_pct: Optional[float] = Form(None, ge=0, le=50),
+    full_name: Optional[str] = Form(None),
+    phone_number: Optional[str] = Form(None, min_length=10, max_length=10),
+    pre_retirement_return: Optional[float] = Form(None, gt=0, le=20),
+    post_retirement_return: Optional[float] = Form(None, gt=0, le=20),
+    savings_pct: Optional[float] = Form(None, ge=7, le=30),
+    buffer_pct: Optional[float] = Form(None, ge=5, le=20),
     db: Session = Depends(get_db),
 ):
     """Update an existing user profile (partial update — only fill fields you want to change)."""
@@ -149,6 +167,19 @@ def update_user(
         user.spouse_income = update_data["spouse_income"]
     if "spouse_income_raise_pct" in update_data:
         user.spouse_income_raise_pct = update_data["spouse_income_raise_pct"]
+
+    if full_name is not None:
+        user.full_name = full_name
+    if phone_number is not None:
+        user.phone_number = phone_number
+    if pre_retirement_return is not None:
+        user.pre_retirement_return = pre_retirement_return
+    if post_retirement_return is not None:
+        user.post_retirement_return = post_retirement_return
+    if savings_pct is not None:
+        user.savings_pct = savings_pct
+    if buffer_pct is not None:
+        user.buffer_pct = buffer_pct
 
     db.commit()
     db.refresh(user)

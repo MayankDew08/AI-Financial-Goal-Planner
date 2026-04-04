@@ -2,13 +2,17 @@ from fastapi import APIRouter, Form, Depends, HTTPException
 from app.schemas.user import Retirement, ExplainRetirementRequest, ExplainOneTimeGoalRequest
 from app.schemas.goals import OneTimeGoalRequest, RecurringGoalRequest
 from pydantic import ValidationError
-from app.services.math.goals import get_retirement_plan, explain_retirement_plan_with_ai, save_retirement_plan, one_time_goal, explain_one_time_goal_with_ai, save_one_time_goal_plan, compute_recurring_goal, save_recurring_goal_plan
+from app.services.math.goals import get_retirement_plan, explain_retirement_plan_with_ai, save_retirement_plan, one_time_goal, explain_one_time_goal_with_ai, save_one_time_goal_plan, compute_recurring_goal, save_recurring_goal_plan, explain_recurring_goal_with_ai
 from app.databse import get_db
-from app.models.db import User
+from app.models.db import User, OneTimeGoalPlan, RecurringGoalPlan
 from app.routes.auth import get_current_user
-from app.services.math.conflict_engine import run_and_save_conflict_engine
+from app.services.math.conflict_engine import (
+    run_and_save_conflict_engine,
+    fetch_retirement_plan,
+)
 from sqlalchemy.orm import Session
 import json
+from datetime import datetime as dt
 from app.utils.log_format import JSONFormatter
 import logging
 
@@ -182,7 +186,7 @@ async def endpoint_retirement(
         "plan_status": plan.get("status") if isinstance(plan, dict) else None,
     })
     
-    return plan
+    return {"plan": plan, "conflict": conflict_results}
 
 @router.post("/explain_retirement_plan")
 def endpoint_explain_retirement_plan(request: ExplainRetirementRequest):
@@ -297,7 +301,7 @@ async def endpoint_one_time_goal(
     })
 
     
-    return plan
+    return {"plan": plan, "conflict": conflict_results}
 
 @router.post("/explain_one_time_goal")
 def endpoint_explain_one_time_goal(request: ExplainOneTimeGoalRequest):
@@ -428,9 +432,19 @@ async def endpoint_recurring_goal(
         "goal_name": goal_name,
         "plan_status": plan.get("status") if isinstance(plan, dict) else None,
     })
-    
 
-    return plan
+# @router.post("/explain_recurring_goal")
+# def endpoint_explain_recurring_goal(request: ExplainRecurringGoalRequest):
+#     logger.info({"event": "explain_recurring_goal_request"})
+#     explanation = explain_recurring_goal_with_ai(
+#         request.goal_plan,
+#         request.user_question
+#     )
+#     logger.info({"event": "explain_recurring_goal_success"})
+#     return {
+#         "explanation": explanation
+#     }
+#     return {"plan": plan, "conflict": conflict_results}
 
 @router.get("/profile_overview")
 async def endpoint_profile_overview(
@@ -450,11 +464,158 @@ async def endpoint_profile_overview(
         })
         raise HTTPException(status_code=404, detail="User not found. Please complete the onboarding first.")
     
-    results= await run_and_save_conflict_engine(user_id=current_user.id, db=db)
+    conflict_summary = await run_and_save_conflict_engine(user_id=current_user.id, db=db)
+
+    retirement_plan = fetch_retirement_plan(db, current_user.id)
+
+    ot_rows = db.query(OneTimeGoalPlan).filter(
+        OneTimeGoalPlan.user_id == current_user.id,
+        OneTimeGoalPlan.is_active == True,
+    ).order_by(OneTimeGoalPlan.created_at.asc()).all()
+    onetime_goals = []
+    for row in ot_rows:
+        try:
+            plan_data = json.loads(row.goal_data)
+        except Exception:
+            plan_data = {}
+        plan_data["goal_id"] = row.id
+        onetime_goals.append(plan_data)
+
+    rec_rows = db.query(RecurringGoalPlan).filter(
+        RecurringGoalPlan.user_id == current_user.id,
+        RecurringGoalPlan.is_active == True,
+    ).order_by(RecurringGoalPlan.created_at.asc()).all()
+    recurring_goals = []
+    for row in rec_rows:
+        try:
+            plan_data = json.loads(row.goal_data)
+        except Exception:
+            plan_data = {}
+        plan_data["goal_id"] = row.id
+        recurring_goals.append(plan_data)
+
+    profile = {
+        "id": current_user.id,
+        "name": current_user.full_name,
+        "full_name": current_user.full_name,
+        "email": current_user.email,
+        "phone": current_user.phone_number,
+        "phone_number": current_user.phone_number,
+        "marital_status": current_user.marital_status,
+        "age": current_user.age,
+        "current_income": current_user.current_income,
+        "income_raise_pct": current_user.income_raise_pct,
+        "current_monthly_expenses": current_user.current_monthly_expenses,
+        "monthly_expenses": current_user.current_monthly_expenses,
+        "inflation_rate": current_user.inflation_rate,
+        "spouse_age": current_user.spouse_age,
+        "spouse_income": current_user.spouse_income,
+        "spouse_income_raise_pct": current_user.spouse_income_raise_pct,
+        "pre_retirement_return": current_user.pre_retirement_return,
+        "post_retirement_return": current_user.post_retirement_return,
+        "savings_floor_pct": current_user.savings_pct,
+        "buffer_pct": current_user.buffer_pct,
+        "onboarding_complete": current_user.onboarding_complete,
+    }
+
     logger.info({
         "event": "profile_overview_success",
         "user_id": current_user.id,
-        "overall_status": results.get("overall_status"),
+        "overall_status": conflict_summary.get("overall_status"),
     })
 
-    return results
+    return {
+        "profile": profile,
+        "goals": {
+            "retirement": retirement_plan,
+            "onetime": onetime_goals,
+            "recurring": recurring_goals,
+        },
+        "conflict_summary": conflict_summary,
+        "last_updated": dt.utcnow().isoformat(),
+    }
+
+
+@router.get("/retirement")
+async def get_retirement_plan_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    plan = fetch_retirement_plan(db, current_user.id)
+    if not plan:
+        return None
+    return plan
+
+
+@router.get("/one_time_goal")
+async def get_one_time_goals_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows = db.query(OneTimeGoalPlan).filter(
+        OneTimeGoalPlan.user_id == current_user.id,
+        OneTimeGoalPlan.is_active == True,
+    ).order_by(OneTimeGoalPlan.created_at.asc()).all()
+    goals = []
+    for row in rows:
+        try:
+            plan_data = json.loads(row.goal_data)
+        except Exception:
+            plan_data = {}
+        plan_data["goal_id"] = row.id
+        goals.append(plan_data)
+    return goals
+
+
+@router.delete("/one_time_goal/{goal_id}")
+async def delete_one_time_goal_endpoint(
+    goal_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    goal = db.query(OneTimeGoalPlan).filter(
+        OneTimeGoalPlan.id == goal_id,
+        OneTimeGoalPlan.user_id == current_user.id,
+    ).first()
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    goal.is_active = False
+    db.commit()
+    return {"message": "Goal deleted successfully"}
+
+
+@router.get("/recurring_goal")
+async def get_recurring_goals_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows = db.query(RecurringGoalPlan).filter(
+        RecurringGoalPlan.user_id == current_user.id,
+        RecurringGoalPlan.is_active == True,
+    ).order_by(RecurringGoalPlan.created_at.asc()).all()
+    goals = []
+    for row in rows:
+        try:
+            plan_data = json.loads(row.goal_data)
+        except Exception:
+            plan_data = {}
+        plan_data["goal_id"] = row.id
+        goals.append(plan_data)
+    return goals
+
+
+@router.delete("/recurring_goal/{goal_id}")
+async def delete_recurring_goal_endpoint(
+    goal_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    goal = db.query(RecurringGoalPlan).filter(
+        RecurringGoalPlan.id == goal_id,
+        RecurringGoalPlan.user_id == current_user.id,
+    ).first()
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    goal.is_active = False
+    db.commit()
+    return {"message": "Goal deleted successfully"}

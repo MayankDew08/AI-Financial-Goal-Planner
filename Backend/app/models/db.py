@@ -39,7 +39,7 @@ class User(Base):
     post_retirement_return      = Column(Float, default=7.0)
 
     # Conflict engine corridor settings — user-adjustable
-    savings_pct                 = Column(Float, default=20.0)  # minimum savings floor (7-40%)
+    savings_pct                 = Column(Float, default=20.0)  # minimum savings floor (7-30%)
     buffer_pct                  = Column(Float, default=10.0)  # emergency buffer (5-20%)
 
     # Onboarding state

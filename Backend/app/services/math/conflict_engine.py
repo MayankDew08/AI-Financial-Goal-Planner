@@ -11,6 +11,9 @@ from app.schemas.calculation import ConflictEngineRequest, FutureValue
 from app.services.math.calculation import future_value_goal
 from app.utils.log_format import JSONFormatter
 from datetime import datetime
+from typing import Optional
+from openai import OpenAI
+import os
 import logging
 
 handler = logging.StreamHandler()
@@ -112,14 +115,6 @@ def compute_corridor_status(
         message = (
             "Your total SIP is approaching the 70% ceiling. "
             "You have limited room to add new goals."
-        )
-
-    elif total_sip < floor_amount:
-        status = "under_saving"
-        alert_level = "advisory"
-        message = (
-            "Your total SIP is below the recommended 20% savings floor. "
-            "Consider increasing contributions to build long-term wealth."
         )
 
     else:
@@ -823,3 +818,99 @@ async def run_and_save_conflict_engine(user_id: str, db: Session) -> dict:
     save_conflict_result(db, user_id, result)
 
     return result
+
+
+
+def explain_conflict_result(
+    conflict_result: dict,
+    user_question: Optional[str] = None
+) -> str:
+    if isinstance(conflict_result, str):
+        try:
+            conflict_result = json.loads(conflict_result)
+        except json.JSONDecodeError:
+            return "Error: conflict result payload must be a JSON object"
+
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        return "Error: HF_TOKEN not found in environment variables"
+    
+    # Remove quotes if present in the token
+    hf_token = hf_token.strip('"').strip("'")
+
+    # Load system prompt from conflict_engine.txt
+    prompt_file_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "conflict_engine.txt"
+    )
+    
+    try:
+        with open(prompt_file_path, 'r', encoding='utf-8') as f:
+            system_prompt_template = f.read()
+    except FileNotFoundError:
+        return f"Error: System prompt file not found at {prompt_file_path}"
+    
+    if user_question is None:
+        user_question = (
+            "Explain this portfolio/conflict-engine result in plain language. "
+            "Focus on which goals are funded, which are deferred, whether there is a corridor breach, "
+            "and what the user should do next."
+        )
+    
+    current_date = datetime.now().strftime("%B %d, %Y")
+    
+    formatted_payload = conflict_result
+    plan_payload_json = json.dumps(formatted_payload, indent=2)
+    
+    system_prompt = system_prompt_template.format(
+        current_date=current_date,
+        plan_payload=plan_payload_json
+    )
+    
+    try:
+        time_start = datetime.now()
+        client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=hf_token,
+        )
+        
+        # Get AI explanation
+        completion = client.chat.completions.create(
+            model="MiniMaxAI/MiniMax-M2.5:fastest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_question
+                }
+            ],
+            max_tokens=10000,
+            temperature=0.3
+        )
+        timedelta = datetime.now() - time_start
+        usage = getattr(completion, "usage", None)
+        logger.info({
+            "event": "AI explanation generated for conflict result",
+            "model": "MiniMaxAI/MiniMax-M2.5:fastest",
+            "time_taken_seconds": timedelta.total_seconds(),
+            "user_question_length": len(user_question),
+            "response_length": len(completion.choices[0].message.content),
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None)
+        }) 
+        return completion.choices[0].message.content
+    
+    except Exception as e:
+        logger.info({
+            "event": "Error generating AI explanation for conflict result",
+            "model": "MiniMaxAI/MiniMax-M2.5:fastest",
+            "user_question_length": len(user_question),
+            "error": str(e),
+        })
+        return f"Error generating AI explanation: {str(e)}"
+    
+

@@ -6,6 +6,7 @@ from app.routes.auth import router as auth_router
 from app.routes.calaculation import router as calculation_router
 from app.routes.user import router as user_router
 from app.routes.goals import router as goals_router
+from app.routes.chat import router as chat_router
 
 app = FastAPI()
 
@@ -21,6 +22,7 @@ app.include_router(calculation_router)
 app.include_router(user_router)
 app.include_router(goals_router)
 app.include_router(auth_router)
+app.include_router(chat_router)
 
 
 @app.on_event("startup")

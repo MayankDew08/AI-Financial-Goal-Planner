@@ -1,4 +1,5 @@
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Any
+from dataclasses import asdict, is_dataclass
 from app.schemas.user import Retirement, BucketAllocation
 from app.schemas.goals import OneTimeGoalRequest, RecurringGoalRequest
 from app.schemas.calculation import CheckFeasibilityRequest, SIPRequest, GlidePathRequest, SuggestedAllocation
@@ -25,6 +26,21 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 
+# Retirement feasibility cap (% of monthly household income) used by retirement checks.
+# Set GOAL_FEASIBILITY_CAP_PCT in environment to override; defaults to 50 for backward compatibility.
+GOAL_FEASIBILITY_CAP_PCT = float(os.getenv("GOAL_FEASIBILITY_CAP_PCT", "50"))
+
+
+def _json_safe(value: Any) -> Any:
+    if is_dataclass(value):
+        return {key: _json_safe(item) for key, item in asdict(value).items()}
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _non_negative(value: float) -> float:
     return max(value, 0.0)
 
@@ -35,7 +51,7 @@ def check_feasibility_retirement(r: Retirement, additional_monthly_sip: float) -
     i = r.inflation_rate / 100
     s = ((1 + g) / (1 + i)) - 1  # derived real step-up rate
     n_acc = r.years_to_retirement
-    savings_ratio_cap = 0.50
+    savings_ratio_cap = GOAL_FEASIBILITY_CAP_PCT / 100
 
     breach_years = []
     yearly_summary = []
@@ -82,7 +98,7 @@ def check_feasibility_retirement(r: Retirement, additional_monthly_sip: float) -
             "monthly_household_income": first_breach["monthly_household_income"],
             "total_monthly_sip": first_breach["total_monthly_sip"],
             "savings_ratio_pct": first_breach["savings_ratio_pct"],
-            "message": "Total monthly SIP exceeds 50% of household monthly income."
+            "message": f"Total monthly SIP exceeds {GOAL_FEASIBILITY_CAP_PCT:.0f}% of household monthly income."
         }
 
     return result
@@ -154,7 +170,7 @@ def compute_retirement_corpus(r: Retirement) -> dict:
                 / (((1 + rpr) ** n_acc - (1 + s) ** n_acc) * (1 + rpr / 12))
             )
         feasible = (additional_sip_required + r.existing_monthly_sip) <= (
-            r.current_income / 12 * 0.5  # rough 50% income cap check
+            r.current_income / 12 * (GOAL_FEASIBILITY_CAP_PCT / 100)
         )
 
     return {
@@ -443,10 +459,34 @@ def format_inr(value: float) -> str:
     return f"-{result}" if is_negative else result
 
 
+def _coerce_json_like(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _coerce_json_like(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_coerce_json_like(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if (stripped.startswith("{") and stripped.endswith("}")) or (
+            stripped.startswith("[") and stripped.endswith("]")
+        ):
+            try:
+                return _coerce_json_like(json.loads(stripped))
+            except Exception:
+                return value
+    return value
+
+
 def build_ai_payload(plan: dict) -> dict:
+    plan = _coerce_json_like(plan)
     corpus = plan["corpus"]
-    buckets = plan["buckets"]["buckets"]
-    glide_path = plan["glide_path"]
+
+    buckets_container = plan.get("buckets", {})
+    if isinstance(buckets_container, dict) and "buckets" in buckets_container:
+        buckets = buckets_container["buckets"]
+    else:
+        buckets = buckets_container
+
+    glide_path = plan.get("glide_path", {})
     
     # Extract user profile from available data
     first_year = glide_path["yearly_schedule"][0] if glide_path.get("yearly_schedule") else {}
@@ -499,6 +539,12 @@ def explain_retirement_plan_with_ai(
     retirement_plan: dict,
     user_question: Optional[str] = None
 ) -> str:
+    if isinstance(retirement_plan, str):
+        try:
+            retirement_plan = json.loads(retirement_plan)
+        except json.JSONDecodeError:
+            return "Error: retirement plan payload must be a JSON object"
+
     # Get HF token from environment
     hf_token = os.getenv("HF_TOKEN")
     if not hf_token:
@@ -539,7 +585,7 @@ def explain_retirement_plan_with_ai(
         user_question = initial_user_prompt
     
     # Get current date
-    current_date = datetime.datetime.now().strftime("%B %d, %Y")
+    current_date = datetime.now().strftime("%B %d, %Y")
     
     # Build formatted payload with INR formatting
     formatted_payload = build_ai_payload(retirement_plan)
@@ -575,15 +621,16 @@ def explain_retirement_plan_with_ai(
             temperature=0.7
         )
         timedelta = datetime.now() - time_start
+        usage = getattr(completion, "usage", None)
         logger.info({
             "event": "AI explanation generated for retirement plan",
             "model": "MiniMaxAI/MiniMax-M2.5:novita",
             "time_taken_seconds": timedelta.total_seconds(),
             "user_question_length": len(user_question),
             "response_length": len(completion.choices[0].message.content),
-            "input_tokens": completion.choices[0].message.usage.input_tokens if hasattr(completion.choices[0].message.usage, 'input_tokens') else None,
-            "output_tokens": completion.choices[0].message.usage.output_tokens if hasattr(completion.choices[0].message.usage, 'output_tokens') else None,
-            "total_tokens": completion.choices[0].message.usage.total_tokens if hasattr(completion.choices[0].message.usage, 'total_tokens') else None
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None)
         })  
         return completion.choices[0].message.content
     
@@ -599,10 +646,19 @@ def explain_retirement_plan_with_ai(
 
 def save_retirement_plan(db, user_id: str, plan: dict, retirement_age: int):
     from app.models.db import RetirementPlan
+    plan_json = json.dumps(_json_safe(plan), default=str)
+
+    corpus_required = plan.get("corpus", {}).get("corpus_required")
+    monthly_sip_required = plan.get("corpus", {}).get("additional_monthly_sip_required")
+    status = plan.get("status")
+
     plan_record = RetirementPlan(
         user_id=user_id,
-        plan_data=plan,
-        retirement_age=retirement_age
+        plan_data=plan_json,
+        corpus_required=corpus_required,
+        monthly_sip_required=monthly_sip_required,
+        retirement_age=retirement_age,
+        status=status,
     )
     db.add(plan_record)
     db.commit()
@@ -649,12 +705,31 @@ def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
         savings_cap_pct=savings_cap_pct
     ))
     
+    # Calculate FV of existing corpus early (needed for both feasible and infeasible)
+    r = data.pre_ret_return /100
+    n = data.years_to_goal
+    fv_existing_corpus = data.existing_corpus * (1 + r) ** n if data.existing_corpus > 0 else 0.0
+    
     if not feasibility_report["feasible"]:
         return {
             "status": "infeasible",
             "goal_name": data.goal_name,
+            "goal_summary": {
+                "goal_amount_today": round(data.goal_amount, 2),
+                "goal_amount_at_target": round(sip_report["goal_at_target_date"], 2),
+                "years_to_goal": data.years_to_goal,
+                "expected_return_pct": data.pre_ret_return,
+                "inflation_adjusted": True
+            },
             "sip_report": sip_report,
-            "feasibility_report": feasibility_report,
+            "sip_plan": {
+                "starting_monthly_sip": round(sip_report["starting_monthly_sip"], 2),
+                "annual_step_up_pct": round(sip_report["annual_step_up_pct"], 2),
+                "existing_monthly_sip": data.existing_monthly_sip,
+                "existing_corpus": data.existing_corpus,
+                "fv_of_existing_corpus": round(fv_existing_corpus, 2)
+            },
+            "feasibility": feasibility_report,
             "message": "This goal is not feasible with your current financial profile and assumptions.",
             "suggestion": "Consider either: (1) Extending the timeline, (2) Reducing the goal amount, or (3) Increasing your income/reducing expenses."
         }
@@ -696,11 +771,6 @@ def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
         end_equity_percent=end_equity
     ))
     
-    # Calculate FV of existing corpus
-    r = data.pre_ret_return /100
-    n = data.years_to_goal
-    fv_existing_corpus = data.existing_corpus * (1 + r) ** n if data.existing_corpus > 0 else 0.0
-    
     time_end=datetime.now()
     logger.info({
         "event": "One-time goal plan computed",
@@ -725,6 +795,7 @@ def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
             "expected_return_pct": data.pre_ret_return,
             "inflation_adjusted": True
         },
+        "sip_report": sip_report,
         "sip_plan": {
             "starting_monthly_sip": round(starting_monthly_sip, 2),
             "annual_step_up_pct": round(annual_step_up_pct, 2),
@@ -744,60 +815,115 @@ def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
         "glide_path": glide_path
     }
     
+def _build_goal_feasibility_payload(plan: dict) -> dict:
+    return {
+        "feasible": plan.get("feasibility", {}).get("feasible", False),
+        "peak_savings_ratio": plan.get("feasibility", {}).get("peak_savings_ratio", "N/A"),
+        "breach_count": plan.get("feasibility", {}).get("breach_count", 0),
+        "first_breach_year": plan.get("feasibility", {}).get("first_breach_year", "N/A"),
+        "monthly_shortfall": format_inr(plan.get("feasibility", {}).get("monthly_shortfall", 0)),
+        "yearly_summary": plan.get("feasibility", {}).get("yearly_summary", []),
+    }
+
+
+def _build_goal_base_payload(plan: dict) -> dict:
+    return {
+        "goal_name": plan.get("goal_name"),
+        "status": plan.get("status"),
+        "feasibility": _build_goal_feasibility_payload(plan),
+    }
+
+
 def build_onetime_goal_ai_payload(plan: dict) -> dict:
 
-    # Pre-format glide path as explicit string table
+    # Pre-format glide path as explicit string table if it exists
     # Forces model to copy text, not reconstruct numbers
-    glide_rows = []
-    for row in plan["glide_path"]["yearly_allocation_table"]:
-        glide_rows.append(
-            f"Year {row['year']} (Age {row['age']}): "
-            f"equity {row['equity_percent']}%, "
-            f"debt {row['debt_percent']}%"
-        )
-    glide_path_formatted = "\n".join(glide_rows)
+    glide_path_formatted = ""
+    if plan.get("glide_path") and plan["glide_path"].get("yearly_allocation_table"):
+        glide_rows = []
+        for row in plan["glide_path"]["yearly_allocation_table"]:
+            glide_rows.append(
+                f"Year {row['year']} (Age {row['age']}): "
+                f"equity {row['equity_percent']}%, "
+                f"debt {row['debt_percent']}%"
+            )
+        glide_path_formatted = "\n".join(glide_rows)
 
-    return {
-        "goal_name":    plan["goal_name"],
-        "status":       plan["status"],
+    payload = {
+        **_build_goal_base_payload(plan),
         "goal_summary": {
-            "goal_amount_today":     format_inr(plan["goal_summary"]["goal_amount_today"]),
-            "goal_amount_at_target": format_inr(plan["goal_summary"]["goal_amount_at_target"]),
-            "years_to_goal":         plan["goal_summary"]["years_to_goal"],
-            "target_age":            plan["goal_summary"]["target_age"],
-            "expected_return_pct":   plan["goal_summary"]["expected_return_pct"],
+            "goal_amount_today": format_inr(plan.get("goal_summary", {}).get("goal_amount_today", 0)),
+            "goal_amount_at_target": format_inr(plan.get("goal_summary", {}).get("goal_amount_at_target", 0)),
+            "years_to_goal": plan.get("goal_summary", {}).get("years_to_goal", 0),
+            "target_age": plan.get("goal_summary", {}).get("target_age", "N/A"),
+            "expected_return_pct": plan.get("goal_summary", {}).get("expected_return_pct", 0),
         },
         "sip_plan": {
-            "starting_monthly_sip":  format_inr(plan["sip_plan"]["starting_monthly_sip"]),
-            "annual_step_up_pct":    plan["sip_plan"]["annual_step_up_pct"],
-            "existing_monthly_sip":  format_inr(plan["sip_plan"]["existing_monthly_sip"]),
-            "fv_of_existing_corpus": format_inr(plan["sip_plan"]["fv_of_existing_corpus"]),
+            "starting_monthly_sip": format_inr(plan.get("sip_plan", {}).get("starting_monthly_sip", 0)),
+            "annual_step_up_pct": plan.get("sip_plan", {}).get("annual_step_up_pct", 0),
+            "existing_monthly_sip": format_inr(plan.get("sip_plan", {}).get("existing_monthly_sip", 0)),
+            "fv_of_existing_corpus": format_inr(plan.get("sip_plan", {}).get("fv_of_existing_corpus", 0)),
         },
-        "feasibility": {
-            "feasible":           plan["feasibility"]["feasible"],
-            "peak_savings_ratio": plan["feasibility"]["peak_savings_ratio"],
-            "breach_count":       plan["feasibility"]["breach_count"],
-            "first_breach_year":  plan["feasibility"]["first_breach_year"],
-            "monthly_shortfall":  format_inr(plan["feasibility"]["monthly_shortfall"]),
-            "yearly_summary":     plan["feasibility"]["yearly_summary"],
-        },
-        "glide_path": {
-            "start_equity_percent":   plan["glide_path"]["start_equity_percent"],
-            "end_equity_percent":     plan["glide_path"]["end_equity_percent"],
-            "total_years":            plan["glide_path"]["total_years"],
-
-            # Pre-formatted string — model copies this directly, no reconstruction
-            "yearly_allocation_table_formatted": glide_path_formatted,
-
-            # Keep raw table too for reference
-            "yearly_allocation_table": plan["glide_path"]["yearly_allocation_table"]
-        }
     }
+
+    # Add glide path only if it exists (feasible goals only)
+    if plan.get("glide_path"):
+        payload["glide_path"] = {
+            "start_equity_percent": plan["glide_path"].get("start_equity_percent", "N/A"),
+            "end_equity_percent": plan["glide_path"].get("end_equity_percent", "N/A"),
+            "total_years": plan["glide_path"].get("total_years", "N/A"),
+            "yearly_allocation_table_formatted": glide_path_formatted,
+            "yearly_allocation_table": plan["glide_path"].get("yearly_allocation_table", []),
+        }
+
+    return payload
+
+
+def build_recurring_goal_ai_payload(plan: dict) -> dict:
+    payload = {
+        **_build_goal_base_payload(plan),
+        "goal_summary": {
+            "current_cost": format_inr(plan.get("goal_summary", {}).get("current_cost", 0)),
+            "goal_inflation_pct": plan.get("goal_summary", {}).get("goal_inflation_pct", 0),
+            "frequency_years": plan.get("goal_summary", {}).get("frequency_years", 0),
+            "num_occurrences": plan.get("goal_summary", {}).get("num_occurrences", 0),
+            "years_to_first": plan.get("goal_summary", {}).get("years_to_first", 0),
+            "total_planning_years": plan.get("goal_summary", {}).get("total_planning_years", 0),
+        },
+        "sip_plan": {
+            "total_monthly_sip": format_inr(plan.get("sip_plan", {}).get("total_monthly_sip", 0)),
+            "sip_stepup_rate_pct": plan.get("sip_plan", {}).get("sip_stepup_rate_pct", 0),
+            "occurrence_plans": [
+                {
+                    **occ,
+                    "cost_at_target": format_inr(occ.get("cost_at_target", 0)),
+                    "monthly_sip": format_inr(occ.get("monthly_sip", 0)),
+                    "fv_existing_corpus": format_inr(occ.get("fv_existing_corpus", 0)),
+                }
+                for occ in plan.get("sip_plan", {}).get("occurrence_plans", [])
+            ],
+        },
+        "glide_paths": plan.get("glide_paths", []),
+    }
+
+    if not plan.get("sip_plan"):
+        payload["sip_plan"] = {
+            "total_monthly_sip": format_inr(0),
+            "sip_stepup_rate_pct": 0,
+            "occurrence_plans": [],
+        }
+
+    return payload
       
 def explain_one_time_goal_with_ai(
     goal_plan: dict,
     user_question: Optional[str] = None
 ) -> str:
+    if isinstance(goal_plan, str):
+        try:
+            goal_plan = json.loads(goal_plan)
+        except json.JSONDecodeError:
+            return "Error: one-time goal payload must be a JSON object"
     
     hf_token = os.getenv("HF_TOKEN")
     if not hf_token:
@@ -842,7 +968,7 @@ def explain_one_time_goal_with_ai(
         user_question = initial_user_prompt
     
     # Get current date
-    current_date = datetime.datetime.now().strftime("%B %d, %Y")
+    current_date = datetime.now().strftime("%B %d, %Y")
     
     # Build formatted payload with INR formatting
     formatted_payload = build_onetime_goal_ai_payload(goal_plan)
@@ -879,15 +1005,16 @@ def explain_one_time_goal_with_ai(
             temperature=0.7
         )
         timedelta = datetime.now() - time_start
+        usage = getattr(completion, "usage", None)
         logger.info({
             "event": "AI explanation generated for one time goal plan",
             "model": "MiniMaxAI/MiniMax-M2.5:novita",
             "time_taken_seconds": timedelta.total_seconds(),
             "user_question_length": len(user_question),
             "response_length": len(completion.choices[0].message.content),
-            "input_tokens": completion.choices[0].message.usage.input_tokens if hasattr(completion.choices[0].message.usage, 'input_tokens') else None,
-            "output_tokens": completion.choices[0].message.usage.output_tokens if hasattr(completion.choices[0].message.usage, 'output_tokens') else None,
-            "total_tokens": completion.choices[0].message.usage.total_tokens if hasattr(completion.choices[0].message.usage, 'total_tokens') else None
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None)
         }) 
         return completion.choices[0].message.content
     
@@ -1059,7 +1186,20 @@ def compute_recurring_goal(data: RecurringGoalRequest) -> dict:
         })  
         return {
             "status": "infeasible",
-            "message": "If the goal is this year, use a lump sum, not a SIP."
+            "goal_name": data.goal_name,
+            "goal_summary": {
+                "current_cost": data.current_cost,
+                "goal_inflation_pct": data.goal_inflation_pct,
+                "frequency_years": data.frequency_years,
+                "num_occurrences": data.num_occurrences,
+                "years_to_first": data.years_to_first,
+                "total_planning_years": 0
+            },
+            "message": "If the goal is this year, use a lump sum, not a SIP.",
+            "feasibility": {
+                "feasible": False,
+                "reason": "Goal timeline is in the past or immediate"
+            }
         }
         
     time_start=datetime.now()
@@ -1185,6 +1325,11 @@ def explain_recurring_goal_with_ai(
     goal_plan: dict,
     user_question: Optional[str] = None
 ) -> str:
+    if isinstance(goal_plan, str):
+        try:
+            goal_plan = json.loads(goal_plan)
+        except json.JSONDecodeError:
+            return "Error: recurring goal payload must be a JSON object"
     
     hf_token = os.getenv("HF_TOKEN")
     if not hf_token:
@@ -1229,10 +1374,10 @@ def explain_recurring_goal_with_ai(
         user_question = initial_user_prompt
     
     # Get current date
-    current_date = datetime.datetime.now().strftime("%B %d, %Y")
+    current_date = datetime.now().strftime("%B %d, %Y")
     
     # Build formatted payload with INR formatting
-    formatted_payload = build_onetime_goal_ai_payload(goal_plan)
+    formatted_payload = build_recurring_goal_ai_payload(goal_plan)
     plan_payload_json = json.dumps(formatted_payload, indent=2)
     
     
@@ -1266,15 +1411,16 @@ def explain_recurring_goal_with_ai(
             temperature=0.1
         )
         timedelta = datetime.now() - time_start
+        usage = getattr(completion, "usage", None)
         logger.info({
             "event": "AI explanation generated for recurrung goal plan",
             "model": "MiniMaxAI/MiniMax-M2.5:novita",
             "time_taken_seconds": timedelta.total_seconds(),
             "user_question_length": len(user_question),
             "response_length": len(completion.choices[0].message.content),
-            "input_tokens": completion.choices[0].message.usage.input_tokens if hasattr(completion.choices[0].message.usage, 'input_tokens') else None,
-            "output_tokens": completion.choices[0].message.usage.output_tokens if hasattr(completion.choices[0].message.usage, 'output_tokens') else None,
-            "total_tokens": completion.choices[0].message.usage.total_tokens if hasattr(completion.choices[0].message.usage, 'total_tokens') else None
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None)
         }) 
         return completion.choices[0].message.content
     

@@ -1,6 +1,8 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field, model_validator,EmailStr
-from typing import Optional
+from pydantic import BaseModel, Field, model_validator, EmailStr
+from typing import Optional, TypedDict, Annotated
+from langchain_core.messages import BaseMessage
+
 
 try:
     from typing import Self
@@ -135,3 +137,19 @@ class ExplainOneTimeGoalRequest(BaseModel):
     goal_plan: dict
     user_question: Optional[str] = None
 
+class ExplainRecurringGoalRequest(BaseModel):
+    goal_plan: dict
+    user_question: Optional[str] = None
+
+
+# REQUEST
+class ChatRequest(BaseModel):
+    session_id: str
+    message:    str
+
+# RESPONSE
+class ChatResponse(BaseModel):
+    reply:          str
+    pending_fields: list[str]      # fields still needed — empty if none
+    action_state:   str            # idle | collecting | confirming | done
+    can_confirm:    bool           # true only when ready for HITL
