@@ -1,1039 +1,1437 @@
-"""
-LangGraph-based Conversational Chatbot Service.
-
-This service implements a stateful conversational interface for financial planning.
-The graph orchestrates:
-1. Intent detection
-2. Slot collection (field-by-field)
-3. Confirmation gate
-4. Tool invocation (deterministic math engines)
-5. AI explanation (reads only computed numbers)
-"""
-
+from typing import Optional, TYPE_CHECKING, Any
+from dataclasses import asdict, is_dataclass
+from app.schemas.user import Retirement, BucketAllocation
+from app.schemas.goals import OneTimeGoalRequest, RecurringGoalRequest
+from app.schemas.calculation import CheckFeasibilityRequest, SIPRequest, GlidePathRequest, SuggestedAllocation
+from app.services.math.calculation import calculate_sip, calculate_glide_path, check_feasibility, suggest_allocation
+import os
+from openai import OpenAI
+import datetime
 import json
+from dotenv import load_dotenv
 import logging
-from typing import TypedDict, Any, Optional, List
 from datetime import datetime
+from app.utils.log_format import JSONFormatter
 
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
-
-from app.schemas.chat import (
-    Intent,
-    SLOTS,
-    REQUIRED_SLOTS,
-    OPTIONAL_SLOTS,
-    Slot,
-)
-from app.services.math.goals import (
-    explain_retirement_plan_with_ai,
-    explain_one_time_goal_with_ai,
-    explain_recurring_goal_with_ai,
-)
-from app.services.math.conflict_engine import explain_conflict_result
-from app.services.utils import call_llm_json, call_llm
-
-logger = logging.getLogger("chatbot_graph")
-
-
-# ─── STATE DEFINITION ──────────────────────────────────────────────────────
-
-class ChatState(TypedDict):
-    """Complete state for one chat session"""
-    # Core
-    messages: List[dict]        # [{"role": "user", "content": "..."}, ...]
-    user_id: str
-    session_id: str
-
-    # Intent
-    intent: Optional[str]
-
-    # Slot collection
-    collected: dict             # {field_name: validated_value, ...}
-    pending: List[str]          # field names still needed
-    current_slot: Optional[str] # which slot we are asking right now
-
-    # Optional slot tracking
-    optional_pending: List[str]
-    skip_optionals: bool
-
-    # Confirmation
-    awaiting_confirmation: bool
-    confirmed: Optional[bool]
-
-    # Tool result
-    tool_result: Optional[dict]
-    tool_error: Optional[str]
-
-    # Output
-    reply: str
-    action_state: str           # idle | collecting | confirming | done
-    can_confirm: bool
-
-
-# ─── HELPER FUNCTIONS ──────────────────────────────────────────────────────
-
-def get_slot_def(intent: str, field_name: str) -> Optional[Slot]:
-    """Get slot definition for intent+field"""
-    intent_enum = normalize_intent(intent)
-    if intent_enum not in SLOTS:
-        return None
-    for slot in SLOTS[intent_enum]:
-        if slot.name == field_name:
-            return slot
-    return None
-
-
-def normalize_intent(intent_value: Any) -> Intent:
-    """Convert raw LLM or state intent values into the Intent enum."""
-    if isinstance(intent_value, Intent):
-        return intent_value
-    if not intent_value:
-        return Intent.UNCLEAR
-    try:
-        return Intent(str(intent_value).strip().lower())
-    except ValueError:
-        return Intent.UNCLEAR
-
-
-def build_confirmation_summary(state: ChatState) -> str:
-    """Build a human-readable confirmation message"""
-    intent = normalize_intent(state["intent"])
-    collected = state["collected"]
-
-    lines = ["\n📋 **Confirmation Summary:**\n"]
-
-    for field_name, value in collected.items():
-        slot_def = get_slot_def(intent, field_name)
-        if slot_def:
-            label = field_name.replace("_", " ").title()
-            lines.append(f"  • {label}: {value}")
-
-    lines.append("\nPlease confirm: Press **Yes** to proceed, **No** to edit.")
-    return "".join(lines)
-
-
-def normalize_value(text: str, field_type: type) -> Any:
-    """
-    Parse user text into typed value.
-    Handles casual language: "15k" → 15000, "12%" → 0.12 or kept as int
-    """
-    text = text.strip()
-
-    # Percent normalization
-    if "%" in text:
-        text = text.replace("%", "").strip()
-
-    # Rupee normalization (k, lakh, crore)
-    if "k" in text.lower():
-        base = float(text.lower().replace("k", ""))
-        return field_type(base * 1000)
-
-    if "lakh" in text.lower():
-        base = float(text.lower().replace("lakh", ""))
-        return field_type(base * 100000)
-
-    if "crore" in text.lower():
-        base = float(text.lower().replace("crore", ""))
-        return field_type(base * 10000000)
-
-    # Direct cast
-    return field_type(text)
-
-
-def log_audit(event: str, user_id: str, intent: str, payload: dict):
-    """Audit log for HITL and traceability"""
-    logger.info({
-        "event": event,
-        "user_id": user_id,
-        "intent": intent,
-        "timestamp": datetime.utcnow().isoformat(),
-        "payload": payload,
-    })
-
-
-# ─── NODE 1: INTENT CLASSIFICATION ──────────────────────────────────────────
-
-def intent_node(state: ChatState) -> ChatState:
-    """
-    Classify user message into an intent.
-    Also extract any slot values mentioned in the message.
-    """
-    last_message = state["messages"][-1]["content"]
-
-    prompt = f"""
-You are a financial planning chatbot. Classify the user's message into exactly ONE intent.
-Return ONLY a valid JSON object with no markdown, no code blocks, no extra text.
-
-Available intents:
-- retirement_explain: User asks about their existing retirement plan
-- retirement_create: User wants to create/plan for retirement
-- onetime_explain: User asks about an existing one-time goal
-- onetime_create: User wants to create a one-time goal (e.g., buy a car, house down payment)
-- recurring_explain: User asks about an existing recurring goal
-- recurring_create: User wants to create a recurring goal (e.g., annual vacation, car replacement)
-- scenario_simulate: User says "what if", "suppose", "if I change", "what happens if"
-- portfolio_overview: User asks about all goals, complete picture, total planning
-- unclear: Cannot determine intent
-
-Also extract ANY slot values already mentioned in the message.
-
-User Message: "{last_message}"
-
-Examples of extraction:
-- "I want to retire at 60" → extracted_slots: {{"retirement_age": 60}}
-- "Save for a house worth 80 lakhs in 5 years" → extracted_slots: {{"goal_name": "House", "goal_amount": 8000000, "years_to_goal": 5}}
-- "What if I retire at 55?" → intent: scenario_simulate, extracted_slots: {{"changed_param": "retirement_age", "new_value": 55}}
-- "Plan a 50k annual vacation trip every 2 years" → intent: recurring_create, extracted_slots: {{"goal_name": "Vacation", "current_cost": 50000, "frequency_years": 2}}
-
-Return JSON with exactly these fields:
-{{
-    "intent": "<intent>",
-    "extracted_slots": {{"field_name": value, ...}},
-    "confidence": 0.0 to 1.0
-}}
-"""
-
-    response = call_llm_json(prompt)
-    intent = normalize_intent(response.get("intent", Intent.UNCLEAR))
-    extracted = response.get("extracted_slots", {})
-    confidence = response.get("confidence", 0)
-
-    if confidence < 0.5:
-        intent = Intent.UNCLEAR
-
-    # Merge extracted slots
-    collected = dict(state.get("collected", {}))
-    for field, value in extracted.items():
-        slot_def = get_slot_def(intent, field)
-        if slot_def:
-            try:
-                cast_value = normalize_value(str(value), slot_def.type)
-                if slot_def.validator(cast_value):
-                    collected[field] = cast_value
-            except (ValueError, TypeError):
-                pass  # Ignore invalid extracted values
-
-    # Compute pending required slots
-    required = REQUIRED_SLOTS.get(intent, [])
-    pending = [f for f in required if f not in collected]
-
-    state["intent"] = intent.value
-    state["collected"] = collected
-    state["pending"] = pending
-
-    return state
-
-
-def route_from_intent(state: ChatState) -> str:
-    """Route based on detected intent"""
-    intent = normalize_intent(state["intent"])
-
-    if intent == Intent.UNCLEAR:
-        return "clarify_node"
-
-    if intent in [
-        Intent.RETIREMENT_EXPLAIN,
-        Intent.ONETIME_EXPLAIN,
-        Intent.RECURRING_EXPLAIN,
-        Intent.PORTFOLIO_OVERVIEW,
-    ]:
-        return "explain_node"
-
-    # Create / simulate intents go to slot collection
-    return "slot_node"
-
-
-def route_from_entry(state: ChatState) -> str:
-    """Resume an in-progress conversation or start a new one."""
-    if state.get("awaiting_confirmation") or state.get("action_state") == "confirming":
-        return "confirm_node"
-
-    if state.get("current_slot") or state.get("pending"):
-        return "slot_node"
-
-    return "intent_node"
-
-
-# ─── NODE 2: SLOT COLLECTION ───────────────────────────────────────────────
-
-def slot_node(state: ChatState) -> ChatState:
-    """
-    Collect missing fields one at a time.
-    Loop until all required (and optionally optional) slots are filled.
-    """
-    current_slot_name = state.get("current_slot")
-    last_message = state["messages"][-1]["content"]
-
-    collected = dict(state.get("collected", {}))
-    pending = list(state.get("pending", []))
-    optional_pending = list(state.get("optional_pending", []))
-    skip_optionals = bool(state.get("skip_optionals", False))
-    current_intent = normalize_intent(state.get("intent"))
-
-    if current_slot_name and current_slot_name in optional_pending:
-        normalized_message = last_message.lower().strip()
-
-        if normalized_message in {"skip", "no", "n"}:
-            optional_pending.remove(current_slot_name)
-            state["optional_pending"] = optional_pending
-            state["current_slot"] = None
-
-            if optional_pending and not skip_optionals:
-                next_opt = optional_pending[0]
-                slot_def = get_slot_def(state["intent"], next_opt)
-                state["current_slot"] = next_opt
-                state["reply"] = (
-                    f"📌 **Optional:** {slot_def.prompt}\n\n"
-                    "(Say 'skip' or 'no' to continue without answering)"
-                )
-                state["action_state"] = "collecting"
-                state["can_confirm"] = False
-                return state
-
-            state["current_slot"] = None
-            state["action_state"] = "confirming"
-            state["can_confirm"] = True
-            state["awaiting_confirmation"] = True
-            state["reply"] = build_confirmation_summary(state)
-            return state
-
-        slot_def = get_slot_def(state["intent"], current_slot_name)
-
-        try:
-            cast_value = normalize_value(last_message.strip(), slot_def.type)
-
-            if slot_def.validator(cast_value):
-                collected[current_slot_name] = cast_value
-                optional_pending.remove(current_slot_name)
-                state["collected"] = collected
-                state["optional_pending"] = optional_pending
-                state["current_slot"] = None
-            else:
-                state["reply"] = f"❌ {slot_def.error_msg}\n\n{slot_def.prompt}"
-                state["action_state"] = "collecting"
-                state["can_confirm"] = False
-                return state
-
-        except (ValueError, TypeError):
-            state["reply"] = f"I didn't quite understand that.\n\n{slot_def.prompt}"
-            state["action_state"] = "collecting"
-            state["can_confirm"] = False
-            return state
-
-    # If we just asked for a field, try to fill it
-    if current_slot_name and current_slot_name in pending:
-        slot_def = get_slot_def(state["intent"], current_slot_name)
-
-        try:
-            cast_value = normalize_value(last_message.strip(), slot_def.type)
-
-            if slot_def.validator(cast_value):
-                # Valid — store it
-                collected[current_slot_name] = cast_value
-                pending.remove(current_slot_name)
-                state["collected"] = collected
-                state["pending"] = pending
-                state["current_slot"] = None
-            else:
-                # Failed validation — ask again with error
-                state["reply"] = f"❌ {slot_def.error_msg}\n\n{slot_def.prompt}"
-                state["action_state"] = "collecting"
-                state["can_confirm"] = False
-                return state
-
-        except (ValueError, TypeError):
-            # Cannot cast — ask again
-            state["reply"] = f"I didn't quite understand that.\n\n{slot_def.prompt}"
-            state["action_state"] = "collecting"
-            state["can_confirm"] = False
-            return state
-
-    # Update pending after possible fill
-    required = REQUIRED_SLOTS.get(current_intent, [])
-    pending = [f for f in required if f not in collected]
-    state["collected"] = collected
-    state["pending"] = pending
-
-    if pending:
-        # Ask for next missing field
-        next_field = pending[0]
-        slot_def = get_slot_def(state["intent"], next_field)
-
-        state["current_slot"] = next_field
-        state["reply"] = slot_def.prompt
-        state["action_state"] = "collecting"
-        state["can_confirm"] = False
-        return state
-
-    # All required slots filled — move toward optional slots
-    optional = OPTIONAL_SLOTS.get(current_intent, [])
-    optional_pending = [f for f in optional if f not in collected]
-    state["optional_pending"] = optional_pending
-
-    if optional_pending and not state.get("skip_optionals"):
-        # Ask first optional
-        next_opt = optional_pending[0]
-        slot_def = get_slot_def(state["intent"], next_opt)
-        state["current_slot"] = next_opt
-        state["reply"] = f"📌 **Optional:** {slot_def.prompt}\n\n(Say 'skip' or 'no' to continue without answering)"
-        state["action_state"] = "collecting"
-        state["can_confirm"] = False
-        return state
-
-    # All slots done — go to confirm
-    state["current_slot"] = None
-    state["action_state"] = "confirming"
-    state["can_confirm"] = True
-    state["awaiting_confirmation"] = True
-    state["reply"] = build_confirmation_summary(state)
-
-    return state
-
-
-def route_from_slot(state: ChatState) -> str:
-    """Stop after one response; continue on the next user turn."""
-    return END
-
-
-# ─── NODE 3: CONFIRMATION GATE ────────────────────────────────────────────
-
-def confirm_node(state: ChatState) -> ChatState:
-    """
-    Ask for explicit confirmation before any write/computation.
-    Reparse optional slots if user says 'no'.
-    """
-    last_message = state["messages"][-1]["content"].lower().strip()
-
-    yes_signals = ["yes", "ok", "okay", "sure", "confirm", "go ahead", "create", "save", "do it", "correct", "right", "proceed", "y"]
-    no_signals = ["no", "n", "cancel", "stop", "change", "edit", "wrong", "incorrect", "wait", "hold on", "not yet"]
-
-    is_yes = any(sig in last_message for sig in yes_signals)
-    is_no = any(sig in last_message for sig in no_signals)
-
-    # Check for optional slot skip signals
-    if state.get("current_slot") and "skip" in last_message:
-        collected = dict(state["collected"])
-        optional_pending = list(state.get("optional_pending", []))
-
-        if state["current_slot"] in optional_pending:
-            optional_pending.remove(state["current_slot"])
-            state["optional_pending"] = optional_pending
-            state["current_slot"] = None
-
-            # Ask next optional if any
-            if optional_pending:
-                next_opt = optional_pending[0]
-                slot_def = get_slot_def(state["intent"], next_opt)
-                state["current_slot"] = next_opt
-                state["reply"] = f"📌 **Optional:** {slot_def.prompt}\n\n(Say 'skip' to continue)"
-                state["action_state"] = "collecting"
-                return state
-
-            # All optionals done
-            state["action_state"] = "confirming"
-            state["can_confirm"] = True
-            state["awaiting_confirmation"] = True
-            state["reply"] = build_confirmation_summary(state)
-            return state
-
-    if is_yes:
-        state["confirmed"] = True
-        state["awaiting_confirmation"] = False
-        state["action_state"] = "done"
-
-        log_audit(
-            "plan_confirmed",
-            state["user_id"],
-            state["intent"],
-            state["collected"],
-        )
-
-        return state
-
-    if is_no:
-        state["confirmed"] = False
-        state["awaiting_confirmation"] = False
-        state["current_slot"] = None
-        state["pending"] = []
-        state["collected"] = {}
-        state["optional_pending"] = []
-        state["intent"] = None
-        state["tool_result"] = None
-        state["tool_error"] = None
-        state["reply"] = (
-            "No problem. Send me the updated request again and I will rebuild it from scratch."
-        )
-        state["action_state"] = "done"
-        return state
-
-    # Ambiguous — ask again
-    state["reply"] = f"Just to confirm — shall I create this? Please say **yes** or **no**.\n{build_confirmation_summary(state)}"
-    state["can_confirm"] = True
-    return state
-
-
-def route_from_confirm(state: ChatState) -> str:
-    """Route based on confirmation"""
-    if state.get("confirmed"):
-        return "tool_node"
-    return END
-
-
-def _is_infeasible_result(payload: Any) -> bool:
-    return isinstance(payload, dict) and str(payload.get("status", "")).lower() == "infeasible"
-
-
-def _infeasible_reply(payload: dict, goal_label: str) -> str:
-    feasibility = payload.get("feasibility") if isinstance(payload, dict) else {}
-    if not isinstance(feasibility, dict):
-        feasibility = {}
-    failure = feasibility.get("failure") if isinstance(feasibility, dict) else {}
-    if not isinstance(failure, dict):
-        failure = {}
-
-    reason = payload.get("message") or failure.get("message") or "This goal is not feasible with your current profile and assumptions."
-    return (
-        f"{goal_label} is currently not feasible.\n"
-        f"Reason: {reason}\n"
-        "Try one of these: extend timeline, reduce goal amount, or increase monthly surplus."
-    )
-
-
-# ─── NODE 4: TOOL INVOCATION ───────────────────────────────────────────────
-
-def tool_node(state: ChatState) -> ChatState:
-    """
-    Call deterministic math functions.
-    Only numbers from math engine go to explain layer.
-    """
-    import asyncio
-    from app.services.math.goals import (
-        get_retirement_plan,
-        one_time_goal,
-        compute_recurring_goal,
-        save_retirement_plan,
-        save_one_time_goal_plan,
-        save_recurring_goal_plan,
-    )
-    from app.services.math.conflict_engine import run_and_save_conflict_engine
-    from app.databse import get_db
+if TYPE_CHECKING:
     from app.models.db import User
 
-    intent = normalize_intent(state["intent"])
-    collected = state["collected"]
-    user_id = state["user_id"]
+# Load environment variables from .env file
+load_dotenv()
 
-    # Create a fresh session
-    from app.databse import SessionLocal
-    db = SessionLocal()
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
+logger = logging.getLogger("goal_services")
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
-    try:
-        # Fetch user profile
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            raise ValueError("User not found")
 
-        if intent == Intent.RETIREMENT_CREATE:
-            # Build Retirement request from collected + user profile
-            from app.schemas.user import Retirement
+# Retirement feasibility cap (% of monthly household income) used by retirement checks.
+# Set GOAL_FEASIBILITY_CAP_PCT in environment to override; defaults to 50 for backward compatibility.
+GOAL_FEASIBILITY_CAP_PCT = float(os.getenv("GOAL_FEASIBILITY_CAP_PCT", "50"))
 
-            profile_data = {
-                "name": user.full_name,
-                "email": user.email,
-                "phone_number": user.phone_number,
-                "password": "placeholder",
-                "marital_status": user.marital_status or "Single",
-                "age": user.age or 30,
-                "current_income": user.current_income or 500000,
-                "income_raise_pct": user.income_raise_pct or 5.0,
-                "current_monthly_expenses": collected.get("current_monthly_expenses", user.current_monthly_expenses or 50000),
-                "inflation_rate": user.inflation_rate or 6.0,
-                "spouse_age": user.spouse_age,
-                "spouse_income": user.spouse_income or 0,
-                "spouse_income_raise_pct": user.spouse_income_raise_pct or 0,
-            }
 
-            retirement_req = Retirement(
-                **profile_data,
-                retirement_age=int(collected["retirement_age"]),
-                post_retirement_expense_pct=collected["post_retirement_expense_pct"],
-                post_retirement_return=user.post_retirement_return or 7.0,
-                pre_retirement_return=user.pre_retirement_return or 10.0,
-                life_expectancy=int(collected["life_expectancy"]),
-                annual_post_retirement_income=collected.get("annual_post_retirement_income", 0),
-                existing_corpus=collected.get("existing_corpus", 0),
-                existing_monthly_sip=collected.get("existing_monthly_sip", 0),
-            )
+def _json_safe(value: Any) -> Any:
+    if is_dataclass(value):
+        return {key: _json_safe(item) for key, item in asdict(value).items()}
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
 
-            result = get_retirement_plan(retirement_req)
-            save_retirement_plan(db, user_id, result, retirement_req.retirement_age)
-            
-            # Run conflict engine - handle async
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            loop.run_until_complete(run_and_save_conflict_engine(user_id, db))
 
-        elif intent == Intent.ONETIME_CREATE:
-            from app.schemas.goals import OneTimeGoalRequest
+def _non_negative(value: float) -> float:
+    return max(value, 0.0)
 
-            goal_req = OneTimeGoalRequest(
-                goal_name=collected["goal_name"],
-                goal_amount=collected["goal_amount"],
-                years_to_goal=int(collected["years_to_goal"]),
-                pre_ret_return=user.pre_retirement_return or 10.0,
-                existing_corpus=collected.get("existing_corpus", 0),
-                existing_monthly_sip=0.0,
-                risk_tolerance="moderate",
-            )
 
-            result = one_time_goal(goal_req, user)
-            save_one_time_goal_plan(db, user_id, result)
-            
-            # Run conflict engine
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            loop.run_until_complete(run_and_save_conflict_engine(user_id, db))
+def check_feasibility_retirement(r: Retirement, additional_monthly_sip: float) -> dict:
+    g = r.income_raise_pct / 100
+    gs = (r.spouse_income_raise_pct or 0) / 100
+    i = r.inflation_rate / 100
+    s = ((1 + g) / (1 + i)) - 1  # derived real step-up rate
+    n_acc = r.years_to_retirement
+    savings_ratio_cap = GOAL_FEASIBILITY_CAP_PCT / 100
 
-        elif intent == Intent.RECURRING_CREATE:
-            from app.schemas.goals import RecurringGoalRequest
+    breach_years = []
+    yearly_summary = []
 
-            goal_req = RecurringGoalRequest(
-                goal_name=collected["goal_name"],
-                current_cost=collected["current_cost"],
-                years_to_first=int(collected["years_to_first"]),
-                frequency_years=int(collected["frequency_years"]),
-                num_occurrences=int(collected["num_occurrences"]),
-                goal_inflation_pct=collected.get("goal_inflation_pct", 6.0),
-                expected_return_pct=user.pre_retirement_return or 10.0,
-                income_raise_pct=user.income_raise_pct or 5.0,
-                monthly_income=user.current_income / 12 if user.current_income else 40000,
-                monthly_expenses=user.current_monthly_expenses or 50000,
-                existing_corpus=collected.get("existing_corpus", 0),
-            )
+    for year in range(n_acc):
+        # Household income grows each year
+        user_monthly_income = (r.current_income / 12) * (1 + g) ** year
 
-            result = compute_recurring_goal(goal_req)
-            save_recurring_goal_plan(db, user_id, result)
-            
-            # Run conflict engine
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            loop.run_until_complete(run_and_save_conflict_engine(user_id, db))
+        spouse_monthly_income = 0.0
+        if r.marital_status == "Married" and r.spouse_income:
+            spouse_monthly_income = (r.spouse_income / 12) * (1 + gs) ** year
 
-        elif intent == Intent.SCENARIO_SIMULATE:
-            # For scenario, we re-fetch the retirement plan and modify one param
-            from app.services.math.goals import get_retirement_plan
-            from app.models.db import RetirementPlan
-            import json
+        total_monthly_income = user_monthly_income + spouse_monthly_income
 
-            plan_row = (
-                db.query(RetirementPlan)
-                .filter(RetirementPlan.user_id == user_id, RetirementPlan.is_active == True)
-                .order_by(RetirementPlan.created_at.desc())
-                .first()
-            )
+        # Total SIP steps up at sip_raise_pct
+        total_sip = (r.existing_monthly_sip + additional_monthly_sip) * (1 + s) ** year
 
-            if not plan_row:
-                raise ValueError("No existing retirement plan to simulate")
+        ratio = total_sip / total_monthly_income if total_monthly_income > 0 else float('inf')
 
-            plan_data = json.loads(plan_row.plan_data)
-            if not isinstance(plan_data, dict):
-                raise ValueError("Existing retirement plan data is invalid. Please create a fresh retirement plan and retry scenario simulation.")
+        record = {
+            "year": year + 1,
+            "age": r.age + year,
+            "monthly_household_income": round(total_monthly_income, 2),
+            "total_monthly_sip": round(total_sip, 2),
+            "savings_ratio_pct": round(ratio * 100, 1),
+            "within_cap": ratio <= savings_ratio_cap
+        }
+        yearly_summary.append(record)
 
-            # Create modified retirement request
-            from app.schemas.user import Retirement
+        if ratio > savings_ratio_cap:
+            breach_years.append(record)
 
-            # Extract original values and apply change
-            param_name = collected["changed_param"]
-            new_value = collected["new_value"]
+    feasible = bool(len(breach_years) == 0)
 
-            profile_data = {
-                "name": user.full_name,
-                "email": user.email,
-                "phone_number": user.phone_number,
-                "password": "placeholder",
-                "marital_status": user.marital_status or "Single",
-                "age": user.age or 30,
-                "current_income": user.current_income or 500000,
-                "income_raise_pct": user.income_raise_pct or 5.0,
-                "current_monthly_expenses": (
-                    new_value if param_name == "current_monthly_expenses"
-                    else user.current_monthly_expenses or 50000
-                ),
-                "inflation_rate": user.inflation_rate or 6.0,
-                "spouse_age": user.spouse_age,
-                "spouse_income": user.spouse_income or 0,
-                "spouse_income_raise_pct": user.spouse_income_raise_pct or 0,
-            }
+    result = {
+        "feasible": feasible
+    }
 
-            retirement_req = Retirement(
-                **profile_data,
-                retirement_age=(
-                    int(new_value) if param_name == "retirement_age"
-                    else plan_data.get("retirement_age", 60)
-                ),
-                post_retirement_expense_pct=(
-                    new_value if param_name == "post_retirement_expense_pct"
-                    else plan_data.get("post_retirement_expense_pct", 75)
-                ),
-                post_retirement_return=user.post_retirement_return or 7.0,
-                pre_retirement_return=user.pre_retirement_return or 10.0,
-                life_expectancy=(
-                    int(new_value) if param_name == "life_expectancy"
-                    else plan_data.get("life_expectancy", 85)
-                ),
-                annual_post_retirement_income=plan_data.get("annual_post_retirement_income", 0),
-                existing_corpus=plan_data.get("existing_corpus", 0),
-                existing_monthly_sip=plan_data.get("existing_monthly_sip", 0),
-            )
+    if not feasible:
+        first_breach = breach_years[0]
+        result["failure"] = {
+            "year": first_breach["year"],
+            "age": first_breach["age"],
+            "monthly_household_income": first_breach["monthly_household_income"],
+            "total_monthly_sip": first_breach["total_monthly_sip"],
+            "savings_ratio_pct": first_breach["savings_ratio_pct"],
+            "message": f"Total monthly SIP exceeds {GOAL_FEASIBILITY_CAP_PCT:.0f}% of household monthly income."
+        }
 
-            new_plan = get_retirement_plan(retirement_req)
-            if not isinstance(new_plan, dict):
-                raise ValueError("Scenario simulation returned invalid output. Please retry.")
+    return result
 
-            if _is_infeasible_result(new_plan):
-                result = {
-                    "status": "infeasible",
-                    "changed_param": param_name,
-                    "new_value": new_value,
-                    "message": new_plan.get("message") or "This retirement scenario is not feasible.",
-                    "feasibility": new_plan.get("feasibility") or {},
-                }
-            else:
-                # Compute delta vs original using nested corpus objects
-                orig_corpus = (plan_data.get("corpus") or {}).get("corpus_required", 0)
-                new_corpus = (new_plan.get("corpus") or {}).get("corpus_required", 0)
-                delta = new_corpus - orig_corpus
 
-                result = {
-                    "status": "feasible",
-                    "original_corpus": orig_corpus,
-                    "new_corpus": new_corpus,
-                    "delta": delta,
-                    "delta_pct": (delta / orig_corpus * 100) if orig_corpus > 0 else 0,
-                    "changed_param": param_name,
-                    "new_value": new_value,
-                    "message": f"Changing {param_name} to {new_value}",
-                }
+def compute_retirement_corpus(r: Retirement) -> dict:
+    i = r.inflation_rate / 100
+    rp = r.post_retirement_return / 100
+    rpr = r.pre_retirement_return / 100
+    n_acc = r.years_to_retirement
+    n_ret = r.retirement_duration
+    s = r.sip_raise_pct / 100
 
+    # Step 1: Inflation-adjusted annual expense at retirement
+    annual_expense_at_retirement = (
+        r.current_monthly_expenses * 12 * (r.post_retirement_expense_pct / 100)
+        * (1 + i) ** n_acc
+    )
+
+    # Step 2: Net annual withdrawal
+    income_at_retirement = r.annual_post_retirement_income * (1 + i) ** n_acc
+    net_withdrawal = annual_expense_at_retirement - income_at_retirement
+
+    # Step 3: Required corpus — growing annuity
+    if abs(rp - i) < 1e-9:
+        corpus_required = net_withdrawal * n_ret
+    else:
+        corpus_required = (
+            net_withdrawal
+            * (1 - ((1 + i) / (1 + rp)) ** n_ret)
+            / (rp - i)
+        )
+
+    # Step 4: FV of existing corpus
+    fv_corpus = r.existing_corpus * (1 + rpr) ** n_acc
+
+    # Step 5: FV of existing SIP with step-up
+    if r.existing_monthly_sip > 0:
+        annual_sip = r.existing_monthly_sip * 12
+        if abs(rpr - s) < 1e-9:
+            fv_sip = annual_sip * n_acc * (1 + rpr) ** (n_acc - 1)
         else:
-            result = {"error": f"No tool for intent {intent}"}
-
-        state["tool_result"] = result
-        state["tool_error"] = None
-
-    except Exception as e:
-        state["tool_error"] = str(e)
-        state["tool_result"] = None
-        state["reply"] = f"❌ Error: {str(e)}"
-        state["action_state"] = "done"
-        logger.error(f"Tool error: {e}")
-    
-    finally:
-        db.close()
-
-    return state
-
-
-def route_from_tool(state: ChatState) -> str:
-    """Route based on tool result"""
-    if state.get("tool_error"):
-        return "error_node"
-    return "explain_node"
-
-
-# ─── NODE 5: EXPLANATION ───────────────────────────────────────────────────
-
-def explain_node(state: ChatState) -> ChatState:
-    """
-    Generate AI explanation from computed payload.
-    AI reads numbers only, cannot alter them.
-    """
-    from app.databse import SessionLocal
-    from app.models.db import ConflictResults, GoalPlan, OneTimeGoalPlan, RecurringGoalPlan, RetirementPlan, User
-
-    intent = normalize_intent(state["intent"])
-    db = SessionLocal()
-    user_id = state["user_id"]
-
-    try:
-        if intent == Intent.RETIREMENT_EXPLAIN:
-            # Fetch all active retirement plans
-            plan_rows = (
-                db.query(RetirementPlan)
-                .filter(RetirementPlan.user_id == user_id, RetirementPlan.is_active == True)
-                .order_by(RetirementPlan.created_at.desc())
-                .all()
+            fv_sip = (
+                annual_sip
+                * ((1 + rpr) ** n_acc - (1 + s) ** n_acc)
+                / (rpr - s)
             )
-            if not plan_rows:
-                reply = "📊 You don't have a retirement plan yet. Would you like to create one?"
-            else:
-                # Use the most recent plan for explanation
-                plan_data = json.loads(plan_rows[0].plan_data)
-                reply = explain_retirement_plan_with_ai(plan_data)
-                
-                # If multiple plans exist, note that
-                if len(plan_rows) > 1:
-                    reply += f"\n\n📌 *You have {len(plan_rows)} retirement plans in your database.*"
+    else:
+        fv_sip = 0.0
 
-        elif intent == Intent.ONETIME_EXPLAIN:
-            # Fetch all active one-time goals
-            goal_rows = (
-                db.query(OneTimeGoalPlan)
-                .filter(OneTimeGoalPlan.user_id == user_id, OneTimeGoalPlan.is_active == True)
-                .order_by(OneTimeGoalPlan.created_at.desc())
-                .all()
+    fv_sip = _non_negative(fv_sip)
+
+    # Step 6: Corpus gap
+    corpus_gap = corpus_required - fv_corpus - fv_sip
+
+    # Step 7: Required additional monthly SIP
+    if corpus_gap <= 0:
+        additional_sip_required = 0.0
+        feasible = True
+    else:
+        if abs(rpr - s) < 1e-9:
+            # Degenerate case
+            additional_sip_required = corpus_gap / (
+                n_acc * (1 + rpr) ** (n_acc - 1) * 12
             )
-            if not goal_rows:
-                reply = "📊 You don't have any one-time goals yet. Would you like to create one?"
-            else:
-                # Use the most recent goal for detailed explanation
-                goal_data = json.loads(goal_rows[0].goal_data)
-                reply = explain_one_time_goal_with_ai(goal_data)
-                
-                # If multiple goals exist, summarize them
-                if len(goal_rows) > 1:
-                    goals_summary = "\n\n📋 **Your Other One-Time Goals:**\n"
-                    for idx, row in enumerate(goal_rows[1:], 1):
-                        goals_summary += f"  {idx}. {row.goal_name} - ₹{row.target_amount:,.0f}\n"
-                    reply += goals_summary
-
-        elif intent == Intent.RECURRING_EXPLAIN:
-            # Fetch all active recurring goals
-            goal_rows = (
-                db.query(RecurringGoalPlan)
-                .filter(RecurringGoalPlan.user_id == user_id, RecurringGoalPlan.is_active == True)
-                .order_by(RecurringGoalPlan.created_at.desc())
-                .all()
-            )
-            if not goal_rows:
-                reply = "📊 You don't have any recurring goals yet. Would you like to create one?"
-            else:
-                # Use the most recent goal for detailed explanation
-                goal_data = json.loads(goal_rows[0].goal_data)
-                reply = explain_recurring_goal_with_ai(goal_data)
-                
-                # If multiple goals exist, summarize them
-                if len(goal_rows) > 1:
-                    goals_summary = "\n\n📋 **Your Other Recurring Goals:**\n"
-                    for idx, row in enumerate(goal_rows[1:], 1):
-                        goals_summary += f"  {idx}. {row.goal_name}\n"
-                    reply += goals_summary
-
-        elif intent == Intent.PORTFOLIO_OVERVIEW:
-            # Fetch profile and conflict engine result
-            profile_row = db.query(User).filter(User.id == user_id).first()
-            
-            if not profile_row:
-                reply = "📊 User profile not found. Please complete your profile first."
-            else:
-                # Fetch latest conflict engine result
-                conflict_row = (
-                    db.query(ConflictResults)
-                    .filter(ConflictResults.user_id == user_id, ConflictResults.is_latest == True)
-                    .first()
-                )
-                
-                if not conflict_row:
-                    reply = "📊 Add some goals first, and I'll show you your complete financial picture."
-                else:
-                    # Build profile overview payload
-                    conflict_data = json.loads(conflict_row.result_data)
-                    profile_overview = {
-                        "profile": {
-                            "name": profile_row.full_name,
-                            "age": profile_row.age,
-                            "marital_status": profile_row.marital_status,
-                            "monthly_income": profile_row.current_income / 12 if profile_row.current_income else 0,
-                            "monthly_expenses": profile_row.current_monthly_expenses or 0,
-                            "inflation_rate": profile_row.inflation_rate or 6.0,
-                        },
-                        "conflict_result": conflict_data,
-                    }
-                    # Feed to conflict engine explanation
-                    reply = explain_conflict_result(profile_overview)
-
-        elif intent == Intent.SCENARIO_SIMULATE:
-            plan_row = (
-                db.query(RetirementPlan)
-                .filter(RetirementPlan.user_id == user_id, RetirementPlan.is_active == True)
-                .order_by(RetirementPlan.created_at.desc())
-                .first()
-            )
-
-            if not plan_row:
-                reply = "📊 You don't have a retirement plan yet. Would you like to create one first?"
-            elif state.get("tool_result"):
-                delta_info = state["tool_result"]
-                if _is_infeasible_result(delta_info):
-                    reply = _infeasible_reply(delta_info, "Scenario")
-                else:
-                    plan_data = json.loads(plan_row.plan_data)
-                    scenario_prompt = (
-                        "The user ran a retirement scenario simulation. "
-                        "Explain the impact of the change using the existing plan and the delta below. "
-                        "Focus on what changed and what it means for the user.\n\n"
-                        f"Scenario delta:\n{json.dumps(delta_info, indent=2)}"
-                    )
-                    reply = explain_retirement_plan_with_ai(plan_data, user_question=scenario_prompt)
-            else:
-                reply = "Could not compute scenario. Please try again."
-
-        elif intent == Intent.RETIREMENT_CREATE and state.get("tool_result"):
-            if _is_infeasible_result(state["tool_result"]):
-                reply = _infeasible_reply(state["tool_result"], "Retirement goal")
-            else:
-                reply = explain_retirement_plan_with_ai(state["tool_result"])
-
-        elif intent == Intent.ONETIME_CREATE and state.get("tool_result"):
-            if _is_infeasible_result(state["tool_result"]):
-                reply = _infeasible_reply(state["tool_result"], "One-time goal")
-            else:
-                reply = explain_one_time_goal_with_ai(state["tool_result"])
-
-        elif intent == Intent.RECURRING_CREATE and state.get("tool_result"):
-            if _is_infeasible_result(state["tool_result"]):
-                reply = _infeasible_reply(state["tool_result"], "Recurring goal")
-            else:
-                reply = explain_recurring_goal_with_ai(state["tool_result"])
-
-        elif state.get("tool_result"):
-            reply = "✅ Plan created and saved successfully! You can now explore your goals and scenarios."
-
         else:
-            reply = "I'm not sure how to explain that. Could you rephrase?"
+            additional_sip_required = (
+                corpus_gap * (rpr - s)
+                / (((1 + rpr) ** n_acc - (1 + s) ** n_acc) * (1 + rpr / 12))
+            )
+        feasible = (additional_sip_required + r.existing_monthly_sip) <= (
+            r.current_income / 12 * (GOAL_FEASIBILITY_CAP_PCT / 100)
+        )
 
-        state["reply"] = reply
-        state["action_state"] = "done"
-        state["can_confirm"] = False
+    return {
+        "annual_expense_at_retirement": round(_non_negative(annual_expense_at_retirement), 2),
+        "income_at_retirement": round(_non_negative(income_at_retirement), 2),
+        "net_annual_withdrawal": round(_non_negative(net_withdrawal), 2),
+        "corpus_required": round(_non_negative(corpus_required), 2),
+        "fv_existing_corpus": round(_non_negative(fv_corpus), 2),
+        "fv_existing_sip": round(_non_negative(fv_sip), 2),
+        "corpus_gap": round(_non_negative(corpus_gap), 2),
+        "additional_monthly_sip_required": round(_non_negative(additional_sip_required), 2),
+        "feasible": feasible,
+    }
 
-    except Exception as e:
-        state["reply"] = f"Error generating explanation: {str(e)}"
-        state["action_state"] = "done"
-        state["can_confirm"] = False
-        logger.error(f"Explain error: {e}")
+def compute_bucket_strategy(
+    corpus_required: float,
+    net_annual_withdrawal: float,   # W — first year withdrawal at retirement
+    inflation_rate: float,          # % — for projecting future withdrawals
+    retirement_age: int,
+    life_expectancy: int,
+    current_age_at_review: Optional[int] = None  # for glide path if reviewing mid-retirement
+) -> dict:
+    i = inflation_rate / 100
+    corpus_required = _non_negative(corpus_required)
+    W = _non_negative(net_annual_withdrawal)
+    review_age = current_age_at_review or retirement_age  # at retirement if first plan
+
+    # ── Bucket 1: Years 1–3
+    B1_size = W * 3
+    # No equity at all — pure stability
+    B1_equity_pct = 0.0
+    B1_debt_pct   = 100.0
+
+    # ── Bucket 2: Years 4–10 (7 years)
+    # Sum of inflation-grown withdrawals for years 4 through 10
+    if i > 1e-9:
+        # Geometric sum: W*(1+i)^3 + W*(1+i)^4 + ... + W*(1+i)^9
+        B2_size = W * (1 + i)**3 * ((1 + i)**7 - 1) / i
+    else:
+        B2_size = W * 7
+
+    # Glide path for Bucket 2 equity based on age at review
+    if review_age < 65:
+        B2_equity_pct = 30.0
+    elif review_age < 70:
+        B2_equity_pct = 20.0
+    else:
+        B2_equity_pct = 10.0
+    B2_debt_pct = 100.0 - B2_equity_pct
+
+    # ── Bucket 3: Remainder — years 11 to life expectancy
+    B3_size = corpus_required - B1_size - B2_size
+
+    if B3_size < 0:
+        # Corpus is too small to fill all three buckets properly
+        # Prioritise B1 (immediate needs), compress B2, nothing left for B3
+        B3_size = 0.0
+        B2_size = max(corpus_required - B1_size, 0.0)
+
+    # Glide path for Bucket 3 equity
+    if review_age < 65:
+        B3_equity_pct = 70.0
+    elif review_age < 70:
+        B3_equity_pct = 60.0
+    elif review_age < 75:
+        B3_equity_pct = 50.0
+    else:
+        B3_equity_pct = 40.0   # floor — never goes below this
+    B3_debt_pct = 100.0 - B3_equity_pct
+
+    def split(size, eq_pct):
+        eq = size * eq_pct / 100
+        return round(eq, 2), round(size - eq, 2)
+
+    B1_eq, B1_debt = split(B1_size, B1_equity_pct)
+    B2_eq, B2_debt = split(B2_size, B2_equity_pct)
+    B3_eq, B3_debt = split(B3_size, B3_equity_pct)
+
+    buckets = {
+        "bucket_1": BucketAllocation(
+            name="Bucket 1 — Stability",
+            size=round(B1_size, 2),
+            equity_pct=B1_equity_pct,
+            debt_pct=B1_debt_pct,
+            years_covered="Years 1–3",
+            purpose="Immediate withdrawals. Never exposed to market risk.",
+            equity_amount=B1_eq,
+            debt_amount=B1_debt
+        ),
+        "bucket_2": BucketAllocation(
+            name="Bucket 2 — Stability with Moderate Growth",
+            size=round(B2_size, 2),
+            equity_pct=B2_equity_pct,
+            debt_pct=B2_debt_pct,
+            years_covered="Years 4–10",
+            purpose="Replenishes Bucket 1. Moderate equity for inflation protection.",
+            equity_amount=B2_eq,
+            debt_amount=B2_debt
+        ),
+        "bucket_3": BucketAllocation(
+            name="Bucket 3 — Long-Term Growth",
+            size=round(B3_size, 2),
+            equity_pct=B3_equity_pct,
+            debt_pct=B3_debt_pct,
+            years_covered=f"Years 11–{life_expectancy - retirement_age}",
+            purpose="Long-term growth engine. Untouched for first 10 years.",
+            equity_amount=B3_eq,
+            debt_amount=B3_debt
+        )
+    }
+
+    # ── Sanity check
+    total_allocated = B1_size + B2_size + B3_size
+    unallocated = corpus_required - total_allocated
+
+    return {
+        "corpus_required":    round(_non_negative(corpus_required), 2),
+        "total_allocated":    round(_non_negative(total_allocated), 2),
+        "unallocated_buffer": round(_non_negative(unallocated), 2),  # should be ~0 or small positive
+        "review_age":         review_age,
+        "retirement_duration_years": life_expectancy - retirement_age,
+        "buckets":            buckets,
+        "refill_rules": {
+            "B1_refill_trigger": "B1 balance falls below 1 year of current expenses",
+            "B1_refill_source":  "Sell from Bucket 2 debt portion first",
+            "B2_refill_trigger": "B2 balance falls below 2 years of current expenses",
+            "B2_refill_source":  "Sell from Bucket 3 — only after equity has recovered",
+            "downturn_rule":     "Never sell equity during a market downturn. Live off B1 cash."
+        }
+    }
+# ── Function 4: Pre-retirement glide path ─────────────────────────
+def compute_pre_retirement_glide_path(r: Retirement, monthly_sip: float) -> dict:
+    i = r.inflation_rate / 100
+    g = r.income_raise_pct / 100
+    s = ((1 + g) / (1 + i)) - 1          # derived step-up rate
+
+    n_acc = r.years_to_retirement
+    schedule = []
+
+    for year in range(n_acc):
+        age_this_year       = r.age + year
+        years_to_retirement = n_acc - year
+        sip_this_year       = monthly_sip * (1 + s) ** year
+
+        # Equity allocation driven by years remaining to retirement
+        if years_to_retirement > 15:
+            equity_pct = 75.0
+        elif years_to_retirement > 10:
+            equity_pct = 60.0
+        elif years_to_retirement > 5:
+            equity_pct = 40.0
+        elif years_to_retirement > 2:
+            equity_pct = 25.0
+        else:
+            equity_pct = 10.0
+
+        debt_pct   = 100.0 - equity_pct
+        sip_equity = round(sip_this_year * equity_pct / 100, 2)
+        sip_debt   = round(sip_this_year * debt_pct   / 100, 2)
+
+        schedule.append({
+            "year":               year + 1,
+            "age":                age_this_year,
+            "years_to_retirement": years_to_retirement,
+            "monthly_sip":        round(sip_this_year, 2),
+            "equity_pct":         equity_pct,
+            "debt_pct":           debt_pct,
+            "sip_to_equity":      sip_equity,
+            "sip_to_debt":        sip_debt,
+        })
+
+    # Summarise the allocation bands for a quick overview
+    bands = {}
+    for record in schedule:
+        label = f"{int(record['equity_pct'])}% equity / {int(record['debt_pct'])}% debt"
+        if label not in bands:
+            bands[label] = {
+                "equity_pct":    record["equity_pct"],
+                "debt_pct":      record["debt_pct"],
+                "from_age":      record["age"],
+                "to_age":        record["age"],
+                "from_year":     record["year"],
+                "to_year":       record["year"],
+                "years_in_band": 1
+            }
+        else:
+            bands[label]["to_age"]      = record["age"]
+            bands[label]["to_year"]     = record["year"]
+            bands[label]["years_in_band"] += 1
+
+    return {
+        "accumulation_years":  n_acc,
+        "retirement_age":      r.retirement_age,
+        "sip_stepup_rate_pct": round(s * 100, 4),
+        "allocation_bands":    list(bands.values()),   # quick summary
+        "yearly_schedule":     schedule                # full year-by-year detail
+    }
+
+
+# ── Orchestrator: updated to include glide path ───────────────────
+def get_retirement_plan(r: Retirement) -> dict:
+    # Step 1: Corpus and SIP
+    time_start = datetime.now()
+    corpus_result = compute_retirement_corpus(r)
+
+    # Step 2: Feasibility
+    feasibility = check_feasibility_retirement(
+        r,
+        additional_monthly_sip=corpus_result["additional_monthly_sip_required"]
+    )
+
+    if not feasibility["feasible"]:
+        return {
+            "status":      "infeasible",
+            "corpus":      corpus_result,
+            "feasibility": feasibility,
+            "glide_path":  None,
+            "buckets":     None
+        }
+
+    # Step 3: Total monthly SIP the user needs to invest from month 1
+    total_monthly_sip = (
+        r.existing_monthly_sip
+        + corpus_result["additional_monthly_sip_required"]
+    )
+
+    # Step 4: Pre-retirement glide path — how to invest that SIP each year
+    glide_path = compute_pre_retirement_glide_path(r, total_monthly_sip)
+
+    # Step 5: Post-retirement bucket strategy — how to draw down after retirement
+    buckets = compute_bucket_strategy(
+        corpus_required       = corpus_result["corpus_required"],
+        net_annual_withdrawal = corpus_result["net_annual_withdrawal"],
+        inflation_rate        = r.inflation_rate,
+        retirement_age        = r.retirement_age,
+        life_expectancy       = r.life_expectancy,
+        current_age_at_review = r.retirement_age
+    )
     
-    finally:
-        db.close()
+    time_end = datetime.now()
+    logger.info({
+        "event": "Retirement plan computed",
+        "time_taken_seconds": (time_end - time_start).total_seconds(),
+        "feasible": feasibility["feasible"],
+        "corpus_required": corpus_result["corpus_required"],
+        "additional_monthly_sip_required": corpus_result["additional_monthly_sip_required"]
+    })
 
-    return state
-
-
-# ─── FALLBACK NODES ────────────────────────────────────────────────────────
-
-def clarify_node(state: ChatState) -> ChatState:
-    """Ask user to clarify their intent"""
-    state["reply"] = """
-I'm not sure what you mean. Could you clarify?
-
-I can help you with:
-• **Retirement** planning (create or review)
-• **One-time goals** (e.g., buy a car, house down payment)
-• **Recurring goals** (e.g., annual vacation, car replacement)
-• **Scenarios** ("What if I retire at 55?")
-• **Portfolio overview** (complete financial picture)
-
-What would you like?
-"""
-    state["action_state"] = "done"
-    return state
+    return {
+        "status":      "feasible",
+        "corpus":      corpus_result,
+        "feasibility": feasibility,
+        "glide_path":  glide_path,   # pre-retirement  — accumulation roadmap
+        "buckets":     buckets       # post-retirement — drawdown structure
+    }
 
 
-def error_node(state: ChatState) -> ChatState:
-    """Handle errors gracefully"""
-    error_msg = state.get("tool_error", "Unknown error")
-    state["reply"] = f"⚠️ Something went wrong: {error_msg}\n\nPlease try again or rephrase your request."
-    state["action_state"] = "done"
-    return state
+def format_inr(value: float) -> str:
+    is_negative = value < 0
+    value = abs(value)
+    
+    # Split integer and decimal parts
+    integer_part = int(value)
+    decimal_part = round(value - integer_part, 2)
+    decimal_str = f"{decimal_part:.2f}".split(".")[1]
+    
+    # Indian grouping: last 3 digits, then groups of 2
+    s = str(integer_part)
+    if len(s) <= 3:
+        formatted = s
+    else:
+        # Last 3 digits
+        last3 = s[-3:]
+        remaining = s[:-3]
+        # Group remaining in pairs from right
+        groups = []
+        while len(remaining) > 2:
+            groups.append(remaining[-2:])
+            remaining = remaining[:-2]
+        if remaining:
+            groups.append(remaining)
+        groups.reverse()
+        formatted = ",".join(groups) + "," + last3
+
+    result = f"₹{formatted}.{decimal_str}"
+    return f"-{result}" if is_negative else result
 
 
-# ─── GRAPH ASSEMBLY ────────────────────────────────────────────────────────
+def _coerce_json_like(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _coerce_json_like(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_coerce_json_like(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if (stripped.startswith("{") and stripped.endswith("}")) or (
+            stripped.startswith("[") and stripped.endswith("]")
+        ):
+            try:
+                return _coerce_json_like(json.loads(stripped))
+            except Exception:
+                return value
+    return value
 
-def build_graph():
-    """Build and compile the LangGraph state machine"""
-    graph = StateGraph(ChatState)
 
-    # Add nodes
-    graph.add_node("entry_node", lambda state: state)
-    graph.add_node("intent_node", intent_node)
-    graph.add_node("slot_node", slot_node)
-    graph.add_node("confirm_node", confirm_node)
-    graph.add_node("tool_node", tool_node)
-    graph.add_node("explain_node", explain_node)
-    graph.add_node("clarify_node", clarify_node)
-    graph.add_node("error_node", error_node)
+def build_ai_payload(plan: dict) -> dict:
+    plan = _coerce_json_like(plan)
+    corpus = plan["corpus"]
 
-    # Set entry point
-    graph.set_entry_point("entry_node")
+    buckets_container = plan.get("buckets", {})
+    if isinstance(buckets_container, dict) and "buckets" in buckets_container:
+        buckets = buckets_container["buckets"]
+    else:
+        buckets = buckets_container
 
-    graph.add_conditional_edges(
-        "entry_node",
-        route_from_entry,
-        {
-            "intent_node": "intent_node",
-            "slot_node": "slot_node",
-            "confirm_node": "confirm_node",
+    glide_path = plan.get("glide_path", {})
+    
+    # Extract user profile from available data
+    first_year = glide_path["yearly_schedule"][0] if glide_path.get("yearly_schedule") else {}
+    user_profile = {
+        "age": first_year.get("age", "N/A"),
+        "retirement_age": glide_path.get("retirement_age", "N/A"),
+        "life_expectancy": plan.get("buckets", {}).get("review_age", 0) + 
+                          plan.get("buckets", {}).get("retirement_duration_years", 0),
+    }
+
+    return {
+        "user_profile": user_profile,
+        "plan_summary": {
+            # Pre-formatted — model copies exactly, never reformats
+            "corpus_required":                 format_inr(corpus["corpus_required"]),
+            "annual_expense_at_retirement":    format_inr(corpus["annual_expense_at_retirement"]),
+            "income_at_retirement":            format_inr(corpus["income_at_retirement"]),
+            "net_annual_withdrawal":           format_inr(corpus["net_annual_withdrawal"]),
+            "fv_existing_corpus":              format_inr(corpus["fv_existing_corpus"]),
+            "fv_existing_sip":                 format_inr(corpus["fv_existing_sip"]),
+            "corpus_gap":                      format_inr(corpus["corpus_gap"]),
+            "additional_monthly_sip_required": format_inr(corpus["additional_monthly_sip_required"]),
+            "sip_stepup_rate_pct":             f"{glide_path.get('sip_stepup_rate_pct', 0):.2f}%",
         },
+        "glide_path_summary":  glide_path.get("allocation_bands", []),
+        "yearly_sip_schedule": [
+            {
+                **item,
+                "monthly_sip": format_inr(item["monthly_sip"]),
+                "sip_to_equity": format_inr(item["sip_to_equity"]),
+                "sip_to_debt": format_inr(item["sip_to_debt"])
+            }
+            for item in glide_path.get("yearly_schedule", [])
+        ],
+        "bucket_summary": {
+            "bucket_1_size": format_inr(buckets["bucket_1"]["size"]),
+            "bucket_1_equity": format_inr(buckets["bucket_1"]["equity_amount"]),
+            "bucket_1_debt": format_inr(buckets["bucket_1"]["debt_amount"]),
+            "bucket_2_size": format_inr(buckets["bucket_2"]["size"]),
+            "bucket_2_equity": format_inr(buckets["bucket_2"]["equity_amount"]),
+            "bucket_2_debt": format_inr(buckets["bucket_2"]["debt_amount"]),
+            "bucket_3_size": format_inr(buckets["bucket_3"]["size"]),
+            "bucket_3_equity": format_inr(buckets["bucket_3"]["equity_amount"]),
+            "bucket_3_debt": format_inr(buckets["bucket_3"]["debt_amount"]),
+        }
+    }
+
+
+def explain_retirement_plan_with_ai(
+    retirement_plan: dict,
+    user_question: Optional[str] = None
+) -> str:
+    if isinstance(retirement_plan, str):
+        try:
+            retirement_plan = json.loads(retirement_plan)
+        except json.JSONDecodeError:
+            return "Error: retirement plan payload must be a JSON object"
+
+    # Get HF token from environment
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        return "Error: HF_TOKEN not found in environment variables"
+    
+    # Remove quotes if present in the token
+    hf_token = hf_token.strip('"').strip("'")
+    
+    # Load prompts from file
+    prompt_file_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "retirement_agent_prompt.txt"
+    )
+    
+    try:
+        with open(prompt_file_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+    except FileNotFoundError:
+        return f"Error: System prompt file not found at {prompt_file_path}"
+    
+    # Parse SYSTEM_PROMPT and INITIAL_USER_PROMPT from file
+    try:
+        # Extract SYSTEM_PROMPT (everything between SYSTEM_PROMPT = """ and the next """)
+        system_start = file_content.find('SYSTEM_PROMPT = """') + len('SYSTEM_PROMPT = """')
+        system_end = file_content.find('"""', system_start)
+        system_prompt_template = file_content[system_start:system_end]
+        
+        # Extract INITIAL_USER_PROMPT
+        initial_start = file_content.find('INITIAL_USER_PROMPT = """') + len('INITIAL_USER_PROMPT = """')
+        initial_end = file_content.find('"""', initial_start)
+        initial_user_prompt = file_content[initial_start:initial_end]
+        
+    except Exception as e:
+        return f"Error parsing prompt file: {str(e)}"
+    
+    # Use the default comprehensive prompt if no specific question is provided
+    if user_question is None:
+        user_question = initial_user_prompt
+    
+    # Get current date
+    current_date = datetime.now().strftime("%B %d, %Y")
+    
+    # Build formatted payload with INR formatting
+    formatted_payload = build_ai_payload(retirement_plan)
+    plan_payload_json = json.dumps(formatted_payload, indent=2)
+    
+    system_prompt = system_prompt_template.format(
+        current_date=current_date,
+        plan_payload=plan_payload_json
+    )
+    
+    # Initialize OpenAI client with HuggingFace
+    try:
+        time_start=datetime.now()
+        client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=hf_token,
+        )
+        
+        # Get AI explanation
+        completion = client.chat.completions.create(
+            model="MiniMaxAI/MiniMax-M2.5:novita",
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_question
+                }
+            ],
+            max_tokens=10000,
+            temperature=0.7
+        )
+        timedelta = datetime.now() - time_start
+        usage = getattr(completion, "usage", None)
+        logger.info({
+            "event": "AI explanation generated for retirement plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "time_taken_seconds": timedelta.total_seconds(),
+            "user_question_length": len(user_question),
+            "response_length": len(completion.choices[0].message.content),
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None)
+        })  
+        return completion.choices[0].message.content
+    
+    except Exception as e:
+        logger.info({
+            "event": "Error generating AI explanation for retirement plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "user_question_length": len(user_question),
+            "error": str(e),
+        })
+        return f"Error generating AI explanation: {str(e)}"
+    
+
+def save_retirement_plan(db, user_id: str, plan: dict, retirement_age: int):
+    from app.models.db import RetirementPlan
+    plan_json = json.dumps(_json_safe(plan), default=str)
+
+    corpus_required = plan.get("corpus", {}).get("corpus_required")
+    monthly_sip_required = plan.get("corpus", {}).get("additional_monthly_sip_required")
+    status = plan.get("status")
+
+    plan_record = RetirementPlan(
+        user_id=user_id,
+        plan_data=plan_json,
+        corpus_required=corpus_required,
+        monthly_sip_required=monthly_sip_required,
+        retirement_age=retirement_age,
+        status=status,
+    )
+    db.add(plan_record)
+    db.commit()
+    db.refresh(plan_record)
+    return plan_record
+
+#____________________________________One-Time Goal Planning Service____________________________
+
+def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
+    # Extract user profile data from database
+    monthly_income = user.current_income / 12
+    monthly_expenses = user.current_monthly_expenses
+    inflation_rate = user.inflation_rate / 100
+    income_raise_pct = user.income_raise_pct / 100
+    current_age = user.age
+    
+    # One-time goal feasibility uses a fixed 50% savings cap.
+    # `user.savings_pct` is the conflict-engine floor, not the goal-feasibility ceiling.
+    savings_cap_pct = 50.0
+    
+    time_start = datetime.now()
+    # Calculate required SIP with step-up
+    sip_report = calculate_sip(SIPRequest(
+        goal_amount=data.goal_amount,
+        years_to_goal=data.years_to_goal,
+        pre_ret_return=data.pre_ret_return,
+        inflation_rate=user.inflation_rate,  # as percentage
+        income_raise_pct=user.income_raise_pct  # as percentage
+    ))
+    
+    goal_target = sip_report["goal_at_target_date"]
+    starting_monthly_sip = sip_report["starting_monthly_sip"]
+    annual_step_up_pct = sip_report["annual_step_up_pct"]
+    
+    # Check feasibility against user's disposable income
+    feasibility_report = check_feasibility(CheckFeasibilityRequest(
+        starting_monthly_sip=starting_monthly_sip,
+        annual_step_up_pct=annual_step_up_pct,
+        monthly_income=monthly_income,
+        income_raise_pct=user.income_raise_pct,
+        monthly_expenses=monthly_expenses,
+        years_to_goal=int(data.years_to_goal),
+        existing_monthly_sip=data.existing_monthly_sip,
+        savings_cap_pct=savings_cap_pct
+    ))
+    
+    # Calculate FV of existing corpus early (needed for both feasible and infeasible)
+    r = data.pre_ret_return /100
+    n = data.years_to_goal
+    fv_existing_corpus = data.existing_corpus * (1 + r) ** n if data.existing_corpus > 0 else 0.0
+    
+    if not feasibility_report["feasible"]:
+        return {
+            "status": "infeasible",
+            "goal_name": data.goal_name,
+            "goal_summary": {
+                "goal_amount_today": round(data.goal_amount, 2),
+                "goal_amount_at_target": round(sip_report["goal_at_target_date"], 2),
+                "years_to_goal": data.years_to_goal,
+                "expected_return_pct": data.pre_ret_return,
+                "inflation_adjusted": True
+            },
+            "sip_report": sip_report,
+            "sip_plan": {
+                "starting_monthly_sip": round(sip_report["starting_monthly_sip"], 2),
+                "annual_step_up_pct": round(sip_report["annual_step_up_pct"], 2),
+                "existing_monthly_sip": data.existing_monthly_sip,
+                "existing_corpus": data.existing_corpus,
+                "fv_of_existing_corpus": round(fv_existing_corpus, 2)
+            },
+            "feasibility": feasibility_report,
+            "message": "This goal is not feasible with your current financial profile and assumptions.",
+            "suggestion": "Consider either: (1) Extending the timeline, (2) Reducing the goal amount, or (3) Increasing your income/reducing expenses."
+        }
+    
+    # Feasible — now calculate allocation and glide path
+    # Map risk tolerance to allocation adjustment
+    risk_map = {
+        "low": "low",
+        "moderate": "moderate", 
+        "high": "high"
+    }
+    risk_level = risk_map.get(data.risk_tolerance.lower(), "moderate")
+    
+    # Suggest allocation based on time horizon and risk
+    allocation = suggest_allocation(SuggestedAllocation(
+        years=int(data.years_to_goal),
+        risk=risk_level
+    ))
+    
+    equity_allocation = allocation["equity_allocation"]
+    debt_allocation = allocation["debt_allocation"]
+    
+    # Calculate glide path — gradually reduce equity as goal approaches
+    # Conservative approach: reduce to 10-20% equity near goal date
+    goal_age = current_age + int(data.years_to_goal)
+    
+    # End equity based on goal proximity: closer goals need more stability
+    if data.years_to_goal < 3:
+        end_equity = 10.0
+    elif data.years_to_goal < 5:
+        end_equity = 20.0
+    else:
+        end_equity = max(equity_allocation - 50, 10.0)
+    
+    glide_path = calculate_glide_path(GlidePathRequest(
+        current_age=current_age,
+        goal_age=goal_age,
+        start_equity_percent=equity_allocation,
+        end_equity_percent=end_equity
+    ))
+    
+    time_end=datetime.now()
+    logger.info({
+        "event": "One-time goal plan computed",
+        "time_taken_seconds": (time_end - time_start).total_seconds(),
+        "feasible": feasibility_report["feasible"],
+        "goal_amount": data.goal_amount,
+        "goal_target_at_date": goal_target,
+        "starting_monthly_sip": starting_monthly_sip,
+        "annual_step_up_pct": annual_step_up_pct,
+        "equity_allocation_start": equity_allocation,
+        "equity_allocation_end": end_equity
+    })
+    
+    return {
+        "status": "feasible",
+        "goal_name": data.goal_name,
+        "goal_summary": {
+            "goal_amount_today": round(data.goal_amount, 2),
+            "goal_amount_at_target": round(goal_target, 2),
+            "years_to_goal": data.years_to_goal,
+            "target_age": goal_age,
+            "expected_return_pct": data.pre_ret_return,
+            "inflation_adjusted": True
+        },
+        "sip_report": sip_report,
+        "sip_plan": {
+            "starting_monthly_sip": round(starting_monthly_sip, 2),
+            "annual_step_up_pct": round(annual_step_up_pct, 2),
+            "existing_monthly_sip": data.existing_monthly_sip,
+            "total_first_year_sip": round(starting_monthly_sip + data.existing_monthly_sip, 2),
+            "existing_corpus": data.existing_corpus,
+            "fv_of_existing_corpus": round(fv_existing_corpus, 2)
+        },
+        "feasibility": feasibility_report,
+        "allocation": {
+            "initial_equity_pct": equity_allocation,
+            "initial_debt_pct": debt_allocation,
+            "final_equity_pct": end_equity,
+            "final_debt_pct": 100 - end_equity,
+            "risk_profile": data.risk_tolerance
+        },
+        "glide_path": glide_path
+    }
+    
+def _build_goal_feasibility_payload(plan: dict) -> dict:
+    return {
+        "feasible": plan.get("feasibility", {}).get("feasible", False),
+        "peak_savings_ratio": plan.get("feasibility", {}).get("peak_savings_ratio", "N/A"),
+        "breach_count": plan.get("feasibility", {}).get("breach_count", 0),
+        "first_breach_year": plan.get("feasibility", {}).get("first_breach_year", "N/A"),
+        "monthly_shortfall": format_inr(plan.get("feasibility", {}).get("monthly_shortfall", 0)),
+        "yearly_summary": plan.get("feasibility", {}).get("yearly_summary", []),
+    }
+
+
+def _build_goal_base_payload(plan: dict) -> dict:
+    return {
+        "goal_name": plan.get("goal_name"),
+        "status": plan.get("status"),
+        "feasibility": _build_goal_feasibility_payload(plan),
+    }
+
+
+def build_onetime_goal_ai_payload(plan: dict) -> dict:
+
+    # Pre-format glide path as explicit string table if it exists
+    # Forces model to copy text, not reconstruct numbers
+    glide_path_formatted = ""
+    if plan.get("glide_path") and plan["glide_path"].get("yearly_allocation_table"):
+        glide_rows = []
+        for row in plan["glide_path"]["yearly_allocation_table"]:
+            glide_rows.append(
+                f"Year {row['year']} (Age {row['age']}): "
+                f"equity {row['equity_percent']}%, "
+                f"debt {row['debt_percent']}%"
+            )
+        glide_path_formatted = "\n".join(glide_rows)
+
+    payload = {
+        **_build_goal_base_payload(plan),
+        "goal_summary": {
+            "goal_amount_today": format_inr(plan.get("goal_summary", {}).get("goal_amount_today", 0)),
+            "goal_amount_at_target": format_inr(plan.get("goal_summary", {}).get("goal_amount_at_target", 0)),
+            "years_to_goal": plan.get("goal_summary", {}).get("years_to_goal", 0),
+            "target_age": plan.get("goal_summary", {}).get("target_age", "N/A"),
+            "expected_return_pct": plan.get("goal_summary", {}).get("expected_return_pct", 0),
+        },
+        "sip_plan": {
+            "starting_monthly_sip": format_inr(plan.get("sip_plan", {}).get("starting_monthly_sip", 0)),
+            "annual_step_up_pct": plan.get("sip_plan", {}).get("annual_step_up_pct", 0),
+            "existing_monthly_sip": format_inr(plan.get("sip_plan", {}).get("existing_monthly_sip", 0)),
+            "fv_of_existing_corpus": format_inr(plan.get("sip_plan", {}).get("fv_of_existing_corpus", 0)),
+        },
+    }
+
+    # Add glide path only if it exists (feasible goals only)
+    if plan.get("glide_path"):
+        payload["glide_path"] = {
+            "start_equity_percent": plan["glide_path"].get("start_equity_percent", "N/A"),
+            "end_equity_percent": plan["glide_path"].get("end_equity_percent", "N/A"),
+            "total_years": plan["glide_path"].get("total_years", "N/A"),
+            "yearly_allocation_table_formatted": glide_path_formatted,
+            "yearly_allocation_table": plan["glide_path"].get("yearly_allocation_table", []),
+        }
+
+    return payload
+
+
+def build_recurring_goal_ai_payload(plan: dict) -> dict:
+    payload = {
+        **_build_goal_base_payload(plan),
+        "goal_summary": {
+            "current_cost": format_inr(plan.get("goal_summary", {}).get("current_cost", 0)),
+            "goal_inflation_pct": plan.get("goal_summary", {}).get("goal_inflation_pct", 0),
+            "frequency_years": plan.get("goal_summary", {}).get("frequency_years", 0),
+            "num_occurrences": plan.get("goal_summary", {}).get("num_occurrences", 0),
+            "years_to_first": plan.get("goal_summary", {}).get("years_to_first", 0),
+            "total_planning_years": plan.get("goal_summary", {}).get("total_planning_years", 0),
+        },
+        "sip_plan": {
+            "total_monthly_sip": format_inr(plan.get("sip_plan", {}).get("total_monthly_sip", 0)),
+            "sip_stepup_rate_pct": plan.get("sip_plan", {}).get("sip_stepup_rate_pct", 0),
+            "occurrence_plans": [
+                {
+                    **occ,
+                    "cost_at_target": format_inr(occ.get("cost_at_target", 0)),
+                    "monthly_sip": format_inr(occ.get("monthly_sip", 0)),
+                    "fv_existing_corpus": format_inr(occ.get("fv_existing_corpus", 0)),
+                }
+                for occ in plan.get("sip_plan", {}).get("occurrence_plans", [])
+            ],
+        },
+        "glide_paths": plan.get("glide_paths", []),
+    }
+
+    if not plan.get("sip_plan"):
+        payload["sip_plan"] = {
+            "total_monthly_sip": format_inr(0),
+            "sip_stepup_rate_pct": 0,
+            "occurrence_plans": [],
+        }
+
+    return payload
+      
+def explain_one_time_goal_with_ai(
+    goal_plan: dict,
+    user_question: Optional[str] = None
+) -> str:
+    if isinstance(goal_plan, str):
+        try:
+            goal_plan = json.loads(goal_plan)
+        except json.JSONDecodeError:
+            return "Error: one-time goal payload must be a JSON object"
+    
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        return "Error: HF_TOKEN not found in environment variables"
+    
+    # Remove quotes if present in the token
+    hf_token = hf_token.strip('"').strip("'")
+    
+    # Load prompts from file
+    prompt_file_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "one_time_agent_prompt.txt"
+    )
+    
+    try:
+        with open(prompt_file_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+    except FileNotFoundError:
+        return f"Error: System prompt file not found at {prompt_file_path}"
+    
+    # Parse SYSTEM_PROMPT and INITIAL_USER_PROMPT from file
+    try:
+        # Extract SYSTEM_PROMPT (everything between SYSTEM_PROMPT = """ and the next """)
+        system_start = file_content.find('SYSTEM_PROMPT = """') + len('SYSTEM_PROMPT = """')
+        system_end = file_content.find('"""', system_start)
+        system_prompt_template = file_content[system_start:system_end]
+        
+        # Extract INITIAL_USER_PROMPT
+        if goal_plan["status"] == "feasible":
+            initial_prompt= 'ONETIME_GOAL_INITIAL_USER_PROMPT_FEASIBLE = """'
+        else:
+            initial_prompt= 'ONETIME_GOAL_INITIAL_USER_PROMPT_INFEASIBLE = """'
+        initial_start = file_content.find(initial_prompt) + len(initial_prompt)
+        initial_end = file_content.find('"""', initial_start)
+        initial_user_prompt = file_content[initial_start:initial_end]
+        
+    except Exception as e:
+        return f"Error parsing prompt file: {str(e)}"
+    
+    # Use the default comprehensive prompt if no specific question is provided
+    if user_question is None:
+        user_question = initial_user_prompt
+    
+    # Get current date
+    current_date = datetime.now().strftime("%B %d, %Y")
+    
+    # Build formatted payload with INR formatting
+    formatted_payload = build_onetime_goal_ai_payload(goal_plan)
+    plan_payload_json = json.dumps(formatted_payload, indent=2)
+    
+    
+    system_prompt = system_prompt_template.format(
+        current_date=current_date,
+        plan_payload=plan_payload_json
+    )
+    
+    # Initialize OpenAI client with HuggingFace
+    try:
+        time_start=datetime.now()
+        client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=hf_token,
+        )
+        
+        # Get AI explanation
+        completion = client.chat.completions.create(
+            model="MiniMaxAI/MiniMax-M2.5:fastest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_question
+                }
+            ],
+            max_tokens=10000,
+            temperature=0.7
+        )
+        timedelta = datetime.now() - time_start
+        usage = getattr(completion, "usage", None)
+        logger.info({
+            "event": "AI explanation generated for one time goal plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "time_taken_seconds": timedelta.total_seconds(),
+            "user_question_length": len(user_question),
+            "response_length": len(completion.choices[0].message.content),
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None)
+        }) 
+        return completion.choices[0].message.content
+    
+    except Exception as e:
+        logger.info({
+            "event": "Error generating AI explanation for one-time goal plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "user_question_length": len(user_question),
+            "error": str(e),
+        })
+        return f"Error generating AI explanation: {str(e)}"
+    
+
+def save_one_time_goal_plan(db, user_id: str, plan: dict):
+    from app.models.db import OneTimeGoalPlan, RecurringGoalPlan
+
+    max_one_time_priority = db.query(OneTimeGoalPlan.priority).filter(
+        OneTimeGoalPlan.user_id == user_id,
+        OneTimeGoalPlan.is_active == True,
+    ).order_by(OneTimeGoalPlan.priority.desc()).first()
+
+    max_recurring_priority = db.query(RecurringGoalPlan.priority).filter(
+        RecurringGoalPlan.user_id == user_id,
+        RecurringGoalPlan.is_active == True,
+    ).order_by(RecurringGoalPlan.priority.desc()).first()
+
+    next_priority = max(
+        max_one_time_priority[0] if max_one_time_priority and max_one_time_priority[0] is not None else 1,
+        max_recurring_priority[0] if max_recurring_priority and max_recurring_priority[0] is not None else 1,
+    ) + 1
+    
+    # Convert plan to JSON string for storage
+    plan_json = json.dumps(plan, default=str)
+    
+    plan_record = OneTimeGoalPlan(
+        user_id=user_id,
+        goal_data=plan_json,
+        goal_name=plan.get("goal_name", "Unnamed Goal"),
+        target_amount=plan.get("goal_summary", {}).get("goal_amount_today", 0.0),
+        future_value=plan.get("goal_summary", {}).get("goal_amount_at_target", 0.0),
+        monthly_sip_required=plan.get("sip_plan", {}).get("starting_monthly_sip", 0.0),
+        time_horizon_years=int(plan.get("goal_summary", {}).get("years_to_goal", 0)),
+        status=plan.get("status", "unknown"),
+        is_active=True,
+        priority=next_priority
+    )
+    db.add(plan_record)
+    db.commit()
+    db.refresh(plan_record)
+    return plan_record
+
+
+def save_recurring_goal_plan(db, user_id: str, plan: dict):
+    from app.models.db import OneTimeGoalPlan, RecurringGoalPlan
+
+    max_one_time_priority = db.query(OneTimeGoalPlan.priority).filter(
+        OneTimeGoalPlan.user_id == user_id,
+        OneTimeGoalPlan.is_active == True,
+    ).order_by(OneTimeGoalPlan.priority.desc()).first()
+
+    max_recurring_priority = db.query(RecurringGoalPlan.priority).filter(
+        RecurringGoalPlan.user_id == user_id,
+        RecurringGoalPlan.is_active == True,
+    ).order_by(RecurringGoalPlan.priority.desc()).first()
+
+    next_priority = max(
+        max_one_time_priority[0] if max_one_time_priority and max_one_time_priority[0] is not None else 1,
+        max_recurring_priority[0] if max_recurring_priority and max_recurring_priority[0] is not None else 1,
+    ) + 1
+
+    plan_json = json.dumps(plan, default=str)
+
+    # Use first occurrence as quick target amount and planning years for dashboard fields.
+    first_occurrence = (plan.get("sip_plan", {}).get("occurrence_plans") or [{}])[0]
+
+    plan_record = RecurringGoalPlan(
+        user_id=user_id,
+        goal_data=plan_json,
+        goal_name=plan.get("goal_name", "Unnamed Goal"),
+        target_amount=first_occurrence.get("cost_at_target", 0.0),
+        future_value=first_occurrence.get("cost_at_target", 0.0),
+        monthly_sip_required=plan.get("sip_plan", {}).get("total_monthly_sip", 0.0),
+        time_horizon_years=int(plan.get("goal_summary", {}).get("total_planning_years", 0)),
+        status=plan.get("status", "unknown"),
+        is_active=True,
+        priority=next_priority,
+    )
+    db.add(plan_record)
+    db.commit()
+    db.refresh(plan_record)
+    return plan_record
+
+#____________________Recurrin Goal Planning Service___________________________
+
+def compute_occurrence_costs(data: RecurringGoalRequest) -> list[dict]:
+    i = data.goal_inflation_pct / 100
+
+    occurrences = []
+    for k in range(1, data.num_occurrences + 1):
+        years_to_k = data.years_to_first + (k - 1) * data.frequency_years
+        cost_at_k  = data.current_cost * (1 + i) ** years_to_k
+
+        occurrences.append({
+            "occurrence":     k,
+            "years_from_now": years_to_k,
+            "cost_at_target": round(cost_at_k, 2)
+        })
+
+    return occurrences
+
+
+def compute_sip_for_occurrence(
+    target_corpus:    float,
+    years_to_goal:    int,
+    r:                float,    # annual return
+    s:                float,    # real step-up rate (Fisher derived)
+) -> float:
+
+    if years_to_goal <= 0:
+        return 0.0
+
+    if abs(r - s) < 1e-9:
+        annual_sip = target_corpus / (
+            years_to_goal * (1 + r) ** (years_to_goal - 1)
+        )
+    else:
+        annual_sip = (
+            target_corpus * (r - s)
+            / (((1 + r) ** years_to_goal - (1 + s) ** years_to_goal)
+               * (1 + r / 12))
+        )
+
+    return annual_sip / 12   # monthly
+
+def apply_existing_corpus(
+    occurrence_costs: list[dict],
+    existing_corpus:  float,
+    r:                float,
+    years_to_first:   int
+) -> list[dict]:
+    
+    if existing_corpus <= 0:
+        return occurrence_costs
+
+    fv_corpus = existing_corpus * (1 + r) ** years_to_first
+
+    adjusted = []
+    for occ in occurrence_costs:
+        if occ["occurrence"] == 1:
+            adjusted_cost = max(0, occ["cost_at_target"] - fv_corpus)
+            adjusted.append({**occ, "cost_at_target": round(adjusted_cost, 2),
+                             "fv_existing_corpus": round(fv_corpus, 2)})
+        else:
+            adjusted.append({**occ, "fv_existing_corpus": 0.0})
+
+    return adjusted
+
+def compute_recurring_goal(data: RecurringGoalRequest) -> dict:
+    r = data.expected_return_pct / 100
+    i = data.goal_inflation_pct  / 100
+    g = data.income_raise_pct    / 100
+    s = ((1 + g) / (1 + i)) - 1     # derived real step-up rate
+    
+    if data.years_to_first <= 0:
+        logger.info({
+            "event":"Recurring goal",
+            "status": "infeasible",
+            "reason": "Goal is in the past or immediate. SIP not suitable."
+        })  
+        return {
+            "status": "infeasible",
+            "goal_name": data.goal_name,
+            "goal_summary": {
+                "current_cost": data.current_cost,
+                "goal_inflation_pct": data.goal_inflation_pct,
+                "frequency_years": data.frequency_years,
+                "num_occurrences": data.num_occurrences,
+                "years_to_first": data.years_to_first,
+                "total_planning_years": 0
+            },
+            "message": "If the goal is this year, use a lump sum, not a SIP.",
+            "feasibility": {
+                "feasible": False,
+                "reason": "Goal timeline is in the past or immediate"
+            }
+        }
+        
+    time_start=datetime.now()
+    # Step 1: cost at each occurrence
+    occurrences = compute_occurrence_costs(data)
+
+    # Step 2: adjust for existing corpus
+    occurrences = apply_existing_corpus(
+        occurrences,
+        data.existing_corpus,
+        r,
+        data.years_to_first
     )
 
-    # Add edges with conditional routing
-    graph.add_conditional_edges(
-        "intent_node",
-        route_from_intent,
-        {
-            "slot_node": "slot_node",
-            "explain_node": "explain_node",
-            "clarify_node": "clarify_node",
+    # Step 3: SIP per occurrence
+    total_monthly_sip = 0.0
+    occurrence_plans  = []
+
+    for occ in occurrences:
+        monthly_sip = compute_sip_for_occurrence(
+            target_corpus  = occ["cost_at_target"],
+            years_to_goal  = occ["years_from_now"],
+            r              = r,
+            s              = s
+        )
+        total_monthly_sip += monthly_sip
+
+        occurrence_plans.append({
+            **occ,
+            "monthly_sip": round(monthly_sip, 2)
+        })
+
+    # Step 4: feasibility across accumulation years
+    feasibility = check_feasibility(CheckFeasibilityRequest(
+        starting_monthly_sip = total_monthly_sip,
+        annual_step_up_pct   = round(s * 100, 4),
+        monthly_income       = data.monthly_income,
+        income_raise_pct     = data.income_raise_pct,
+        monthly_expenses     = data.monthly_expenses,
+        years_to_goal        = data.years_to_first +
+                               (data.num_occurrences - 1) * data.frequency_years,
+        existing_monthly_sip = 0.0,
+        savings_cap_pct      = 50.0
+    ))
+
+    # Step 5: glide path for each occurrence
+    glide_paths = []
+    
+    for occ in occurrence_plans:
+        years_to_occurrence = occ["years_from_now"]
+        
+        # Skip if occurrence is immediate (0 years) or has no SIP required
+        if years_to_occurrence <= 0 or occ["monthly_sip"] <= 0:
+            continue
+        
+        # Get allocation based on time horizon for this occurrence
+        allocation = suggest_allocation(SuggestedAllocation(
+            years=years_to_occurrence,
+            risk="moderate"
+        ))
+        
+        equity_allocation = allocation["equity_allocation"]
+        
+        # End equity based on goal proximity: closer goals need more stability
+        if years_to_occurrence < 3:
+            end_equity = 10.0
+        elif years_to_occurrence < 5:
+            end_equity = 20.0
+        else:
+            end_equity = max(equity_allocation - 50, 10.0)
+        
+        # Calculate glide path for this occurrence
+        glide_path = calculate_glide_path(GlidePathRequest(
+            current_age          = 0,      # use years, not age
+            goal_age             = years_to_occurrence,
+            start_equity_percent = equity_allocation,
+            end_equity_percent   = end_equity
+        ))
+        
+        glide_paths.append({
+            "occurrence":      occ["occurrence"],
+            "years_from_now":  years_to_occurrence,
+            "glide_path":      glide_path
+        })
+
+    status = "feasible" if feasibility["feasible"] else "infeasible"
+    
+    time_end=datetime.now()
+    logger.info({
+        "event": "Recurring goal plan computed",
+        "time_taken_seconds": (time_end - time_start).total_seconds(),
+        "status": status,
+        "total_monthly_sip": total_monthly_sip,
+        "feasible": feasibility["feasible"],
+        "num_occurrences": data.num_occurrences,
+        "years_to_first_occurrence": data.years_to_first
+    })
+    
+    return {
+        "status":             status,
+        "goal_name":          data.goal_name,
+        "goal_summary": {
+            "current_cost":         data.current_cost,
+            "goal_inflation_pct":   data.goal_inflation_pct,
+            "frequency_years":      data.frequency_years,
+            "num_occurrences":      data.num_occurrences,
+            "years_to_first":       data.years_to_first,
+            "total_planning_years": data.years_to_first +
+                                    (data.num_occurrences - 1) * data.frequency_years
         },
-    )
-
-    graph.add_conditional_edges(
-        "slot_node",
-        route_from_slot,
-        {
-            END: END,
+        "sip_plan": {
+            "total_monthly_sip":  round(total_monthly_sip, 2),
+            "sip_stepup_rate_pct": round(s * 100, 4),
+            "occurrence_plans":   occurrence_plans
         },
+        "feasibility": feasibility,
+        "glide_paths":  glide_paths
+    }
+    
+
+    
+def explain_recurring_goal_with_ai(
+    goal_plan: dict,
+    user_question: Optional[str] = None
+) -> str:
+    if isinstance(goal_plan, str):
+        try:
+            goal_plan = json.loads(goal_plan)
+        except json.JSONDecodeError:
+            return "Error: recurring goal payload must be a JSON object"
+    
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        return "Error: HF_TOKEN not found in environment variables"
+    
+    # Remove quotes if present in the token
+    hf_token = hf_token.strip('"').strip("'")
+    
+    # Load prompts from file
+    prompt_file_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "one_time_agent_prompt.txt"
     )
-
-    graph.add_conditional_edges(
-        "confirm_node",
-        route_from_confirm,
-        {
-            "tool_node": "tool_node",
-            END: END,
-        },
+    
+    try:
+        with open(prompt_file_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+    except FileNotFoundError:
+        return f"Error: System prompt file not found at {prompt_file_path}"
+    
+    # Parse SYSTEM_PROMPT and INITIAL_USER_PROMPT from file
+    try:
+        # Extract SYSTEM_PROMPT (everything between SYSTEM_PROMPT = """ and the next """)
+        system_start = file_content.find('RECURRING_GOAL_SYSTEM_PROMPT = """') + len('RECURRING_GOAL_SYSTEM_PROMPT = """')
+        system_end = file_content.find('"""', system_start)
+        system_prompt_template = file_content[system_start:system_end]
+        
+        # Extract INITIAL_USER_PROMPT
+        if goal_plan["status"] == "feasible":
+            initial_prompt= 'RECURRING_GOAL_INITIAL_USER_PROMPT_FEASIBLE = """'
+        else:
+            initial_prompt= 'RECURRING_GOAL_INITIAL_USER_PROMPT_INFEASIBLE = """'
+        initial_start = file_content.find(initial_prompt) + len(initial_prompt)
+        initial_end = file_content.find('"""', initial_start)
+        initial_user_prompt = file_content[initial_start:initial_end]
+        
+    except Exception as e:
+        return f"Error parsing prompt file: {str(e)}"
+    
+    # Use the default comprehensive prompt if no specific question is provided
+    if user_question is None:
+        user_question = initial_user_prompt
+    
+    # Get current date
+    current_date = datetime.now().strftime("%B %d, %Y")
+    
+    # Build formatted payload with INR formatting
+    formatted_payload = build_recurring_goal_ai_payload(goal_plan)
+    plan_payload_json = json.dumps(formatted_payload, indent=2)
+    
+    
+    system_prompt = system_prompt_template.format(
+        current_date=current_date,
+        plan_payload=plan_payload_json
     )
+    
+    # Initialize OpenAI client with HuggingFace
+    try:
+        time_start=datetime.now()
+        client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=hf_token,
+        )
+        
+        # Get AI explanation
+        completion = client.chat.completions.create(
+            model="MiniMaxAI/MiniMax-M2.5:fastest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_question
+                }
+            ],
+            max_tokens=10000,
+            temperature=0.1
+        )
+        timedelta = datetime.now() - time_start
+        usage = getattr(completion, "usage", None)
+        logger.info({
+            "event": "AI explanation generated for recurrung goal plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "time_taken_seconds": timedelta.total_seconds(),
+            "user_question_length": len(user_question),
+            "response_length": len(completion.choices[0].message.content),
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None)
+        }) 
+        return completion.choices[0].message.content
+    
+    except Exception as e:
+        logger.info({
+            "event": "Error generating AI explanation for recurring plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "user_question_length": len(user_question),
+            "error": str(e),
+        })
+        return f"Error generating AI explanation: {str(e)}"
+    
 
-    graph.add_conditional_edges(
-        "tool_node",
-        route_from_tool,
-        {
-            "explain_node": "explain_node",
-            "error_node": "error_node",
-        },
-    )
 
-    # Terminal nodes
-    graph.add_edge("explain_node", END)
-    graph.add_edge("clarify_node", END)
-    graph.add_edge("error_node", END)
-
-    # Compile with memory checkpointer for session persistence
-    app = graph.compile(checkpointer=MemorySaver())
-    return app
-
-
-# Global graph instance
-chatbot_app = build_graph()
