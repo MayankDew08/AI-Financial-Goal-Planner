@@ -21,7 +21,7 @@ ENV PYTHONUNBUFFERED=1
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/').read()" || exit 1
+    CMD sh -c "python -c \"import os, urllib.request; port=os.getenv('PORT','8000'); urllib.request.urlopen(f'http://localhost:{port}/health').read()\"" || exit 1
 
 # Run application with auto-reload disabled for production
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

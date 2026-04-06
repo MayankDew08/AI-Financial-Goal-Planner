@@ -32,3 +32,8 @@ def startup_event():
 @app.get("/")
 def read_root():
     return {"Message": "Welcome to Financial Planning API"}
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
