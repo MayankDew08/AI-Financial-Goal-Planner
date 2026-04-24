@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'app_theme.dart';
@@ -46,9 +48,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
   void initState() {
     super.initState();
     _fadeCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 700),
-    );
+        vsync: this, duration: const Duration(milliseconds: 700));
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _fadeCtrl.forward();
   }
@@ -96,9 +96,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
           age: int.parse(_ageCtrl.text.trim()),
           currentIncome: double.parse(_incomeCtrl.text.trim()),
           incomeRaisePct: double.parse(_incomeRaiseCtrl.text.trim()),
-          currentMonthlyExpenses: double.parse(
-            _monthlyExpensesCtrl.text.trim(),
-          ),
+          currentMonthlyExpenses:
+              double.parse(_monthlyExpensesCtrl.text.trim()),
           inflationRate: double.parse(_inflationRateCtrl.text.trim()),
           spouseAge: _isMarried && _spouseAgeCtrl.text.isNotEmpty
               ? int.tryParse(_spouseAgeCtrl.text.trim())
@@ -145,6 +144,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
         age: profile.age,
         currentIncome: profile.currentIncome,
         incomeRaisePct: profile.incomeRaisePct,
+        inflationRate: profile.inflationRate,
+        monthlyExpenses: profile.currentMonthlyExpenses,
         spouseAge: profile.spouseAge,
         spouseIncome: profile.spouseIncome,
         spouseIncomeRaisePct: profile.spouseIncomeRaisePct,
@@ -172,31 +173,22 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.check_circle_outline,
-                color: AppColors.green,
-                size: 48,
-              ),
+              Icon(Icons.check_circle_outline,
+                  color: AppColors.green, size: 48),
               const SizedBox(height: 16),
-              const Text(
-                'PROFILE CREATED',
-                style: TextStyle(
-                  fontFamily: 'Courier',
-                  fontSize: 16,
-                  letterSpacing: 4,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
+              const Text('PROFILE CREATED',
+                  style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 16,
+                      letterSpacing: 4,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white)),
               const SizedBox(height: 10),
-              Text(
-                'Welcome to VerdeX.',
-                style: TextStyle(
-                  fontFamily: 'Courier',
-                  fontSize: 12,
-                  color: AppColors.textMuted.withOpacity(0.5),
-                ),
-              ),
+              Text('Welcome to VerdeX.',
+                  style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 12,
+                      color: AppColors.textMuted.withOpacity(0.5))),
               const SizedBox(height: 28),
               GestureDetector(
                 onTap: () {
@@ -207,21 +199,16 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                   );
                 },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 28,
-                    vertical: 12,
-                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
                   color: AppColors.green,
-                  child: const Text(
-                    'CONTINUE',
-                    style: TextStyle(
-                      fontFamily: 'Courier',
-                      fontSize: 11,
-                      letterSpacing: 4,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.black,
-                    ),
-                  ),
+                  child: const Text('CONTINUE',
+                      style: TextStyle(
+                          fontFamily: 'Courier',
+                          fontSize: 11,
+                          letterSpacing: 4,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.black)),
                 ),
               ),
             ],
@@ -242,9 +229,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
           children: [
             // Grid background
             CustomPaint(
-              size: MediaQuery.of(context).size,
-              painter: _GridPainter(),
-            ),
+                size: MediaQuery.of(context).size, painter: _GridPainter()),
 
             // Glow top-right
             Positioned(
@@ -255,12 +240,10 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                 height: 320,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      AppColors.green.withOpacity(0.07),
-                      Colors.transparent,
-                    ],
-                  ),
+                  gradient: RadialGradient(colors: [
+                    AppColors.green.withOpacity(0.07),
+                    Colors.transparent,
+                  ]),
                 ),
               ),
             ),
@@ -272,9 +255,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                   Expanded(
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 20,
-                      ),
+                          horizontal: 24, vertical: 20),
                       child: Form(
                         key: _formKey,
                         child: Column(
@@ -284,10 +265,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                             const SizedBox(height: 32),
 
                             // ── Section 0: Account ────────────────────────
-                            const _SectionLabel(
-                              label: '01',
-                              title: 'ACCOUNT DETAILS',
-                            ),
+                            _SectionLabel(
+                                label: '01', title: 'ACCOUNT DETAILS'),
                             const SizedBox(height: 20),
                             _GreenField(
                               label: 'FULL NAME',
@@ -338,8 +317,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               obscureText: _obscurePassword,
                               suffixIcon: GestureDetector(
                                 onTap: () => setState(
-                                  () => _obscurePassword = !_obscurePassword,
-                                ),
+                                    () => _obscurePassword = !_obscurePassword),
                                 child: Icon(
                                   _obscurePassword
                                       ? Icons.visibility_off_outlined
@@ -357,8 +335,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
 
                             // ── Section 2: Personal ────────────────────────
                             const SizedBox(height: 32),
-                            const _SectionLabel(
-                                label: '02', title: 'PERSONAL INFO'),
+                            _SectionLabel(label: '02', title: 'PERSONAL INFO'),
                             const SizedBox(height: 20),
 
                             _buildMaritalToggle(),
@@ -373,7 +350,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                     controller: _ageCtrl,
                                     keyboardType: TextInputType.number,
                                     inputFormatters: [
-                                      FilteringTextInputFormatter.digitsOnly,
+                                      FilteringTextInputFormatter.digitsOnly
                                     ],
                                     validator: (v) {
                                       if (v == null || v.isEmpty) {
@@ -392,8 +369,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
 
                             // ── Section 2: Income ──────────────────────────
                             const SizedBox(height: 32),
-                            const _SectionLabel(
-                                label: '02', title: 'YOUR INCOME'),
+                            _SectionLabel(label: '02', title: 'YOUR INCOME'),
                             const SizedBox(height: 20),
 
                             _GreenField(
@@ -402,8 +378,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               controller: _incomeCtrl,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                                      decimal: true),
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
                                 if (double.tryParse(v) == null) {
@@ -419,8 +394,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               controller: _incomeRaiseCtrl,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                                      decimal: true),
                               suffix: '%',
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
@@ -437,8 +411,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               controller: _monthlyExpensesCtrl,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                                      decimal: true),
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
                                 if (double.tryParse(v) == null) {
@@ -454,8 +427,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                               controller: _inflationRateCtrl,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                                      decimal: true),
                               suffix: '%',
                               validator: (v) {
                                 if (v == null || v.isEmpty) return 'Required';
@@ -468,10 +440,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                             // ── Section 3: Spouse (conditional) ───────────
                             if (_isMarried) ...[
                               const SizedBox(height: 32),
-                              const _SectionLabel(
-                                label: '03',
-                                title: 'SPOUSE DETAILS',
-                              ),
+                              _SectionLabel(
+                                  label: '03', title: 'SPOUSE DETAILS'),
                               const SizedBox(height: 4),
                               Text(
                                 'Optional — leave blank if not applicable',
@@ -489,7 +459,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 controller: _spouseAgeCtrl,
                                 keyboardType: TextInputType.number,
                                 inputFormatters: [
-                                  FilteringTextInputFormatter.digitsOnly,
+                                  FilteringTextInputFormatter.digitsOnly
                                 ],
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
@@ -508,8 +478,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 controller: _spouseIncomeCtrl,
                                 keyboardType:
                                     const TextInputType.numberWithOptions(
-                                  decimal: true,
-                                ),
+                                        decimal: true),
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
                                     if (double.tryParse(v) == null) {
@@ -526,8 +495,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 controller: _spouseIncomeRaiseCtrl,
                                 keyboardType:
                                     const TextInputType.numberWithOptions(
-                                  decimal: true,
-                                ),
+                                        decimal: true),
                                 suffix: '%',
                                 validator: (v) {
                                   if (v != null && v.isNotEmpty) {
@@ -547,35 +515,28 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                 padding: const EdgeInsets.all(14),
                                 decoration: BoxDecoration(
                                   border: Border.all(
-                                    color: AppColors.error.withOpacity(0.4),
-                                  ),
+                                      color: AppColors.error.withOpacity(0.4)),
                                   color: AppColors.error.withOpacity(0.06),
                                 ),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Row(
-                                      children: [
-                                        const Icon(
-                                          Icons.warning_amber_rounded,
-                                          color: AppColors.error,
-                                          size: 16,
-                                        ),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Text(
-                                            _errorMsg!,
-                                            style: TextStyle(
+                                    Row(children: [
+                                      Icon(Icons.warning_amber_rounded,
+                                          color: AppColors.error, size: 16),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          _errorMsg!,
+                                          style: TextStyle(
                                               fontFamily: 'Courier',
                                               fontSize: 11,
                                               height: 1.5,
                                               color: AppColors.error
-                                                  .withOpacity(0.8),
-                                            ),
-                                          ),
+                                                  .withOpacity(0.8)),
                                         ),
-                                      ],
-                                    ),
+                                      ),
+                                    ]),
                                     if (_errorMsg!.contains('starting up') ||
                                         _errorMsg!.contains('cold start')) ...[
                                       const SizedBox(height: 12),
@@ -583,37 +544,27 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
                                         onTap: _isLoading ? null : _submit,
                                         child: Container(
                                           padding: const EdgeInsets.symmetric(
-                                            horizontal: 14,
-                                            vertical: 8,
-                                          ),
+                                              horizontal: 14, vertical: 8),
                                           decoration: BoxDecoration(
-                                            border: Border.all(
-                                              color: AppColors.error
-                                                  .withOpacity(0.5),
-                                            ),
-                                          ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Icon(
-                                                Icons.refresh,
-                                                color: AppColors.error
-                                                    .withOpacity(0.7),
-                                                size: 13,
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Text(
-                                                'RETRY',
-                                                style: TextStyle(
-                                                  fontFamily: 'Courier',
-                                                  fontSize: 10,
-                                                  letterSpacing: 2,
+                                              border: Border.all(
                                                   color: AppColors.error
-                                                      .withOpacity(0.7),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
+                                                      .withOpacity(0.5))),
+                                          child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.refresh,
+                                                    color: AppColors.error
+                                                        .withOpacity(0.7),
+                                                    size: 13),
+                                                const SizedBox(width: 6),
+                                                Text('RETRY',
+                                                    style: TextStyle(
+                                                        fontFamily: 'Courier',
+                                                        fontSize: 10,
+                                                        letterSpacing: 2,
+                                                        color: AppColors.error
+                                                            .withOpacity(0.7))),
+                                              ]),
                                         ),
                                       ),
                                     ],
@@ -646,10 +597,8 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
         border: Border(
-          bottom: BorderSide(
-            color: AppColors.green.withOpacity(0.08),
-            width: 1,
-          ),
+          bottom:
+              BorderSide(color: AppColors.green.withOpacity(0.08), width: 1),
         ),
       ),
       child: Row(
@@ -663,7 +612,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
               fontWeight: FontWeight.bold,
               color: AppColors.green,
               shadows: [
-                Shadow(color: AppColors.green.withOpacity(0.4), blurRadius: 16),
+                Shadow(color: AppColors.green.withOpacity(0.4), blurRadius: 16)
               ],
             ),
           ),
@@ -781,7 +730,7 @@ class _UserOnboardingPageState extends State<UserOnboardingPage>
               _isLoading ? AppColors.green.withOpacity(0.5) : AppColors.green,
           child: Center(
             child: _isLoading
-                ? const SizedBox(
+                ? SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(
@@ -828,10 +777,7 @@ class _SectionLabel extends StatelessWidget {
         ),
         const SizedBox(width: 12),
         Container(
-          width: 1,
-          height: 16,
-          color: AppColors.green.withOpacity(0.3),
-        ),
+            width: 1, height: 16, color: AppColors.green.withOpacity(0.3)),
         const SizedBox(width: 12),
         Text(
           title,
@@ -962,16 +908,12 @@ class _GreenField extends StatelessWidget {
             suffixIcon: suffixIcon,
             filled: true,
             fillColor: AppColors.blackCard,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 14,
-            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.zero,
               borderSide: BorderSide(
-                color: AppColors.green.withOpacity(0.15),
-                width: 1,
-              ),
+                  color: AppColors.green.withOpacity(0.15), width: 1),
             ),
             focusedBorder: const OutlineInputBorder(
               borderRadius: BorderRadius.zero,
@@ -981,7 +923,7 @@ class _GreenField extends StatelessWidget {
               borderRadius: BorderRadius.zero,
               borderSide: BorderSide(color: AppColors.error.withOpacity(0.6)),
             ),
-            focusedErrorBorder: const OutlineInputBorder(
+            focusedErrorBorder: OutlineInputBorder(
               borderRadius: BorderRadius.zero,
               borderSide: BorderSide(color: AppColors.error, width: 1.5),
             ),

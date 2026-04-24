@@ -1,5 +1,3 @@
-// ignore_for_file: deprecated_member_use
-
 import 'package:flutter/material.dart';
 
 // ── App Colors ────────────────────────────────────────────────────────────────
@@ -13,19 +11,9 @@ class AppColors {
   static const Color textMuted = Color(0xFFC8F0D5);
   static const Color error = Color(0xFFFF4F4F);
 
-  // ── Input field fill ──────────────────────────────────────────────────────
-  // blackCard (0x0D1A10) is too dark as a TextFormField background — white
-  // input text and hint text disappear against it. inputFill is lighter so
-  // both read clearly while staying on-theme.
-  static const Color inputFill = Color(0xFF152318);
+  static Color? get inputFill => null;
 
-  // ── Readable label / hint constants ──────────────────────────────────────
-  // Replace inline withOpacity() calls that were producing colours too faint
-  // to read on the dark backgrounds.
-  static const Color fieldLabel =
-      Color(0xFF7DC49A); // field labels (EMAIL ADDRESS etc.)
-  static const Color hintText =
-      Color(0xFF4A7A5A); // placeholder / hint inside inputs
+  static Color? get hintText => null;
 }
 
 // ── Shared TextStyles ─────────────────────────────────────────────────────────
@@ -33,16 +21,15 @@ class AppText {
   static const mono = 'Courier';
 
   static TextStyle label(
-          {double size = 11, double spacing = 3, Color? color}) =>
+          {double size = 10, double spacing = 3, Color? color}) =>
       TextStyle(
         fontFamily: mono,
         fontSize: size,
         letterSpacing: spacing,
-        // was textMuted@0.85 — fieldLabel is a solid colour, always readable
-        color: color ?? AppColors.fieldLabel,
+        color: color ?? AppColors.green.withOpacity(0.65),
       );
 
-  static TextStyle heading({double size = 30, Color color = Colors.white}) =>
+  static TextStyle heading({double size = 28, Color color = Colors.white}) =>
       TextStyle(
         fontFamily: mono,
         fontSize: size,
@@ -52,12 +39,11 @@ class AppText {
         height: 1.05,
       );
 
-  static TextStyle body({double size = 13, Color? color}) => TextStyle(
+  static TextStyle body({double size = 12, Color? color}) => TextStyle(
         fontFamily: mono,
         fontSize: size,
         height: 1.7,
-        // was textMuted@0.75 — full textMuted colour is legible on dark cards
-        color: color ?? AppColors.textMuted,
+        color: color ?? AppColors.textMuted.withOpacity(0.5),
       );
 }
 
@@ -68,6 +54,8 @@ class UserProfile {
   final int age;
   final double currentIncome;
   final double incomeRaisePct;
+  final double inflationRate;
+  final double monthlyExpenses;
   final int? spouseAge;
   final double? spouseIncome;
   final double? spouseIncomeRaisePct;
@@ -78,6 +66,8 @@ class UserProfile {
     required this.age,
     required this.currentIncome,
     required this.incomeRaisePct,
+    this.inflationRate = 6.0,
+    this.monthlyExpenses = 0.0,
     this.spouseAge,
     this.spouseIncome,
     this.spouseIncomeRaisePct,
@@ -85,6 +75,7 @@ class UserProfile {
 
   bool get isMarried => maritalStatus.toLowerCase() == 'married';
 
+  // Mock data — replace with SharedPreferences / state management later
   static const UserProfile mock = UserProfile(
     name: 'Alex',
     maritalStatus: 'married',

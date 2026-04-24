@@ -1,4 +1,4 @@
-// ignore_for_file: deprecated_member_use
+// ignore_for_file: unused_element_parameter, curly_braces_in_flow_control_structures, deprecated_member_use
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -162,7 +162,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                   border: Border.all(color: AppColors.green.withOpacity(0.3))),
-              child: const Text('LIVE',
+              child: Text('LIVE',
                   style: TextStyle(
                       fontFamily: 'Courier',
                       fontSize: 8,
@@ -188,8 +188,7 @@ class _GoalsScreenState extends State<GoalsScreen> {
             border: Border.all(color: AppColors.error.withOpacity(0.4)),
             color: AppColors.error.withOpacity(0.06)),
         child: Row(children: [
-          const Icon(Icons.warning_amber_rounded,
-              color: AppColors.error, size: 16),
+          Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 16),
           const SizedBox(width: 10),
           Expanded(
               child: Text(_errorMsg!,
@@ -291,7 +290,7 @@ class _GoalTemplate {
 class _GoalCard extends StatelessWidget {
   final _GoalTemplate template;
   final VoidCallback onTap;
-  const _GoalCard({required this.template, required this.onTap});
+  const _GoalCard({super.key, required this.template, required this.onTap});
 
   @override
   Widget build(BuildContext context) => GestureDetector(
@@ -343,17 +342,29 @@ class _GoalCard extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ── Result Rendering (shared helpers duplicated for file isolation) ────────────
+// ── Result Rendering ──────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Flattens one level of nesting; skips arrays and deeply nested maps (rendered separately)
 Map<String, dynamic> _flattenResult(Map<String, dynamic> raw) {
   final out = <String, dynamic>{};
   raw.forEach((k, v) {
     if (v is Map<String, dynamic>) {
-      v.forEach((ik, iv) => out[ik] = iv);
-    } else {
+      v.forEach((ik, iv) {
+        if (iv is! List && iv is! Map) out[ik] = iv;
+      });
+    } else if (v is! List) {
       out[k] = v;
     }
+  });
+  return out;
+}
+
+// Collects array/list fields separately for table rendering
+List<MapEntry<String, List>> _extractLists(Map<String, dynamic> raw) {
+  final out = <MapEntry<String, List>>[];
+  raw.forEach((k, v) {
+    if (v is List && v.isNotEmpty) out.add(MapEntry(k, v));
   });
   return out;
 }
@@ -366,7 +377,8 @@ String _smartFmt(String key, dynamic raw) {
   if (n == null) {
     if (s.toLowerCase() == 'true') return 'YES';
     if (s.toLowerCase() == 'false') return 'NO';
-    return s;
+    // Truncate very long strings
+    return s.length > 40 ? '${s.substring(0, 40)}…' : s;
   }
   final lk = key.toLowerCase();
   if (lk.contains('pct') ||
@@ -402,9 +414,7 @@ bool _isPrimaryKey(String key, dynamic value) {
       lk.contains('raise') ||
       lk.contains('input') ||
       lk == 'years' ||
-      lk == 'age') {
-    return false;
-  }
+      lk == 'age') return false;
   if (lk.contains('sip') ||
       lk.contains('corpus') ||
       lk.contains('required') ||
@@ -418,9 +428,7 @@ bool _isPrimaryKey(String key, dynamic value) {
       lk.contains('saving') ||
       lk.contains('result') ||
       lk.contains('amount') ||
-      lk.contains('fund')) {
-    return true;
-  }
+      lk.contains('fund')) return true;
   return n.abs() >= 1000;
 }
 
@@ -432,7 +440,9 @@ class _ApiResultCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final data = _flattenResult(rawData);
-    if (data.isEmpty) {
+    final lists = _extractLists(rawData);
+
+    if (data.isEmpty && lists.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -445,6 +455,7 @@ class _ApiResultCard extends StatelessWidget {
                 color: AppColors.textMuted.withOpacity(0.4))),
       );
     }
+
     final primary =
         data.entries.where((e) => _isPrimaryKey(e.key, e.value)).toList();
     final secondary =
@@ -461,6 +472,7 @@ class _ApiResultCard extends StatelessWidget {
             .toList();
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // ── Section header ───────────────────────────────────────────────────
       Row(children: [
         Container(width: 20, height: 1, color: AppColors.green),
         const SizedBox(width: 10),
@@ -473,6 +485,8 @@ class _ApiResultCard extends StatelessWidget {
                     color: AppColors.green.withOpacity(0.7)))),
       ]),
       const SizedBox(height: 16),
+
+      // ── Hero tiles ───────────────────────────────────────────────────────
       if (heroes.isNotEmpty) ...[
         ...List.generate((heroes.length / 2).ceil(), (i) {
           final left = heroes[i * 2];
@@ -495,8 +509,10 @@ class _ApiResultCard extends StatelessWidget {
             ]),
           );
         }),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
       ],
+
+      // ── Detail rows ──────────────────────────────────────────────────────
       if (details.isNotEmpty)
         Container(
           decoration: BoxDecoration(
@@ -504,7 +520,9 @@ class _ApiResultCard extends StatelessWidget {
               border: Border.all(color: AppColors.green.withOpacity(0.1))),
           child: Column(
             children: details.asMap().entries.map((e) {
-              final isLast = e.key == details.length - 1;
+              final isLast = e.key == details.length - 1 && lists.isEmpty;
+              final val = e.value.value;
+              final fmtVal = _smartFmt(e.value.key, val);
               return Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
@@ -514,28 +532,177 @@ class _ApiResultCard extends StatelessWidget {
                         border: Border(
                             bottom: BorderSide(
                                 color: AppColors.green.withOpacity(0.06)))),
-                child: Row(children: [
-                  Expanded(
-                      flex: 3,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 2,
                       child: Text(_labelFor(e.value.key),
                           style: TextStyle(
                               fontFamily: 'Courier',
                               fontSize: 9,
                               letterSpacing: 1,
-                              color: AppColors.textMuted.withOpacity(0.35)))),
-                  Text(_smartFmt(e.value.key, e.value.value),
-                      style: TextStyle(
-                          fontFamily: 'Courier',
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textMuted.withOpacity(0.75))),
-                ]),
+                              color: AppColors.textMuted.withOpacity(0.35))),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 3,
+                      child: Text(fmtVal,
+                          textAlign: TextAlign.right,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontFamily: 'Courier',
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.textMuted.withOpacity(0.75))),
+                    ),
+                  ],
+                ),
               );
             }).toList(),
           ),
         ),
+
+      // ── Array tables (glide_path, buckets, etc.) ─────────────────────────
+      for (final listEntry in lists) ...[
+        const SizedBox(height: 16),
+        _ArrayTable(label: _labelFor(listEntry.key), items: listEntry.value),
+      ],
     ]);
   }
+}
+
+// Renders a List<dynamic> as a compact scrollable table
+class _ArrayTable extends StatelessWidget {
+  final String label;
+  final List items;
+  const _ArrayTable({required this.label, required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    // Extract column headers from first item (if it's a map)
+    final firstItem = items.first;
+    if (firstItem is! Map) {
+      // Simple list of scalars
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _miniLabel(label),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: items
+              .take(12)
+              .map((item) => Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.blackCard,
+                      border:
+                          Border.all(color: AppColors.green.withOpacity(0.15)),
+                    ),
+                    child: Text(item.toString(),
+                        style: TextStyle(
+                            fontFamily: 'Courier',
+                            fontSize: 10,
+                            color: AppColors.textMuted.withOpacity(0.6))),
+                  ))
+              .toList(),
+        ),
+      ]);
+    }
+
+    // Map list — show as a mini table (max 6 rows to avoid wall of data)
+    final mapItems =
+        items.take(6).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final cols = mapItems.first.keys.take(4).toList(); // max 4 columns
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _miniLabel(label),
+      const SizedBox(height: 8),
+      Container(
+        decoration: BoxDecoration(
+          color: AppColors.blackCard,
+          border: Border.all(color: AppColors.green.withOpacity(0.1)),
+        ),
+        child: Column(children: [
+          // Header row
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              border: Border(
+                  bottom: BorderSide(color: AppColors.green.withOpacity(0.12))),
+              color: AppColors.green.withOpacity(0.05),
+            ),
+            child: Row(
+                children: cols
+                    .map((c) => Expanded(
+                          child: Text(_labelFor(c),
+                              style: TextStyle(
+                                  fontFamily: 'Courier',
+                                  fontSize: 7,
+                                  letterSpacing: 1,
+                                  color: AppColors.green.withOpacity(0.5)),
+                              overflow: TextOverflow.ellipsis),
+                        ))
+                    .toList()),
+          ),
+          // Data rows
+          ...mapItems.asMap().entries.map((e) {
+            final isLast = e.key == mapItems.length - 1;
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: isLast
+                  ? null
+                  : BoxDecoration(
+                      border: Border(
+                          bottom: BorderSide(
+                              color: AppColors.green.withOpacity(0.05)))),
+              child: Row(
+                  children: cols.map((c) {
+                final v = e.value[c];
+                return Expanded(
+                  child: Text(_smartFmt(c, v),
+                      style: TextStyle(
+                          fontFamily: 'Courier',
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textMuted.withOpacity(0.7)),
+                      overflow: TextOverflow.ellipsis),
+                );
+              }).toList()),
+            );
+          }),
+          // "...N more" indicator
+          if (items.length > 6)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                  border: Border(
+                      top: BorderSide(
+                          color: AppColors.green.withOpacity(0.08)))),
+              child: Text('+ ${items.length - 6} more rows',
+                  style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 9,
+                      color: AppColors.textMuted.withOpacity(0.3))),
+            ),
+        ]),
+      ),
+    ]);
+  }
+
+  Widget _miniLabel(String text) => Row(children: [
+        Container(
+            width: 12, height: 1, color: AppColors.green.withOpacity(0.4)),
+        const SizedBox(width: 8),
+        Text(text,
+            style: TextStyle(
+                fontFamily: 'Courier',
+                fontSize: 9,
+                letterSpacing: 3,
+                color: AppColors.green.withOpacity(0.5))),
+      ]);
 }
 
 class _ResultHeroTile extends StatelessWidget {
@@ -672,7 +839,7 @@ class _RetirementGoalSheetState extends State<_RetirementGoalSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const _SheetHeader(
+                _SheetHeader(
                     title: 'RETIREMENT GOAL',
                     icon: Icons.beach_access_outlined),
                 const SizedBox(height: 24),
@@ -707,25 +874,25 @@ class _RetirementGoalSheetState extends State<_RetirementGoalSheet> {
                 const SizedBox(height: 20),
 
                 // ── Existing savings ─────────────────────────────────────
-                const _SheetSectionDivider(label: 'EXISTING SAVINGS'),
+                _SheetSectionDivider(label: 'EXISTING SAVINGS'),
                 const SizedBox(height: 12),
                 _SheetField(
                     label: 'EXISTING CORPUS',
                     ctrl: _corpusCtrl,
                     hint: '0',
-                    required: false),
+                    isRequired: false),
                 const SizedBox(height: 12),
                 _SheetField(
                     label: 'EXISTING MONTHLY SIP',
                     ctrl: _sipCtrl,
                     hint: '0',
-                    required: false),
+                    isRequired: false),
                 const SizedBox(height: 12),
                 _SheetField(
                     label: 'ANNUAL SIP STEP-UP (%)',
                     ctrl: _sipRaiseCtrl,
                     hint: '0',
-                    required: false),
+                    isRequired: false),
                 const SizedBox(height: 20),
 
                 // ── Advanced toggle ──────────────────────────────────────
@@ -775,7 +942,7 @@ class _RetirementGoalSheetState extends State<_RetirementGoalSheet> {
                       label: 'ANNUAL POST-RETIREMENT INCOME (pension, rent...)',
                       ctrl: _annualIncomeCtrl,
                       hint: '0',
-                      required: false),
+                      isRequired: false),
                 ],
 
                 const SizedBox(height: 24),
@@ -900,19 +1067,19 @@ class _OneTimeGoalSheetState extends State<_OneTimeGoalSheet> {
                     }),
                 const SizedBox(height: 20),
 
-                const _SheetSectionDivider(label: 'EXISTING SAVINGS'),
+                _SheetSectionDivider(label: 'EXISTING SAVINGS'),
                 const SizedBox(height: 12),
                 _SheetField(
                     label: 'EXISTING SAVINGS FOR THIS GOAL',
                     ctrl: _corpusCtrl,
                     hint: '0',
-                    required: false),
+                    isRequired: false),
                 const SizedBox(height: 12),
                 _SheetField(
                     label: 'EXISTING MONTHLY SIP FOR THIS GOAL',
                     ctrl: _sipCtrl,
                     hint: '0',
-                    required: false),
+                    isRequired: false),
                 const SizedBox(height: 20),
 
                 // Risk tolerance selector
@@ -1059,13 +1226,13 @@ class _SheetField extends StatelessWidget {
   final String label, hint;
   final TextEditingController ctrl;
   final String? Function(String?)? validator;
-  final bool required;
+  final bool isRequired;
   const _SheetField(
       {required this.label,
       required this.ctrl,
       required this.hint,
       this.validator,
-      this.required = true});
+      this.isRequired = true});
 
   @override
   Widget build(BuildContext context) => Column(
@@ -1085,8 +1252,9 @@ class _SheetField extends StatelessWidget {
               FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
             ],
             validator: validator ??
-                (v) =>
-                    (required && (v == null || v.isEmpty)) ? 'Required' : null,
+                (v) => (isRequired && (v == null || v.isEmpty))
+                    ? 'Required'
+                    : null,
             style: const TextStyle(
                 fontFamily: 'Courier', fontSize: 13, color: Colors.white),
             cursorColor: AppColors.green,
@@ -1111,7 +1279,7 @@ class _SheetField extends StatelessWidget {
                   borderRadius: BorderRadius.zero,
                   borderSide:
                       BorderSide(color: AppColors.error.withOpacity(0.6))),
-              focusedErrorBorder: const OutlineInputBorder(
+              focusedErrorBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
                   borderSide: BorderSide(color: AppColors.error)),
               errorStyle: TextStyle(

@@ -1,4 +1,4 @@
-// ignore_for_file: deprecated_member_use
+// ignore_for_file: unused_element, unused_element_parameter, deprecated_member_use
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -41,12 +41,13 @@ class _PlannerScreenState extends State<PlannerScreen> {
   late final TextEditingController _sipInflationCtrl; // inflation_rate
   late final TextEditingController _sipRaiseCtrl; // income_raise_pct
 
-  // ── Future Value form ─────────────────────────────────────────────────────
+  // ── Future Value form (POST /calculation/future_value_goal)
+  // Schema: { principal, infation_rate, years }
   final _fvFormKey = GlobalKey<FormState>();
-  late final TextEditingController _fvMonthlyCtrl;
-  late final TextEditingController _fvReturnCtrl;
-  late final TextEditingController _fvYearsCtrl;
-  late final TextEditingController _fvCurrentSavingsCtrl;
+  late final TextEditingController _fvPrincipalCtrl; // principal
+  late final TextEditingController
+      _fvInflationCtrl; // infation_rate (backend typo)
+  late final TextEditingController _fvYearsCtrl; // years
 
   // ── Allocation form ───────────────────────────────────────────────────────
   String _allocRisk = 'moderate';
@@ -68,11 +69,11 @@ class _PlannerScreenState extends State<PlannerScreen> {
     _sipRaiseCtrl = TextEditingController(
         text: widget.user.incomeRaisePct.toStringAsFixed(1));
 
-    _fvMonthlyCtrl = TextEditingController();
-    _fvReturnCtrl = TextEditingController(text: '10.0');
+    _fvPrincipalCtrl = TextEditingController();
+    _fvInflationCtrl = TextEditingController(
+        text: widget.user.inflationRate.toStringAsFixed(1));
     _fvYearsCtrl =
         TextEditingController(text: yearsToRetire.toInt().toString());
-    _fvCurrentSavingsCtrl = TextEditingController(text: '0');
   }
 
   @override
@@ -82,10 +83,9 @@ class _PlannerScreenState extends State<PlannerScreen> {
     _sipReturnCtrl.dispose();
     _sipInflationCtrl.dispose();
     _sipRaiseCtrl.dispose();
-    _fvMonthlyCtrl.dispose();
-    _fvReturnCtrl.dispose();
+    _fvPrincipalCtrl.dispose();
+    _fvInflationCtrl.dispose();
     _fvYearsCtrl.dispose();
-    _fvCurrentSavingsCtrl.dispose();
     super.dispose();
   }
 
@@ -123,10 +123,9 @@ class _PlannerScreenState extends State<PlannerScreen> {
     });
     try {
       final result = await ApiService.instance.calcFutureValue(
-        monthlyInvestment: double.parse(_fvMonthlyCtrl.text),
-        annualReturn: double.parse(_fvReturnCtrl.text),
+        principal: double.parse(_fvPrincipalCtrl.text),
+        inflationRate: double.parse(_fvInflationCtrl.text),
         years: double.parse(_fvYearsCtrl.text),
-        currentSavings: double.tryParse(_fvCurrentSavingsCtrl.text) ?? 0,
       );
       setState(() => _fvResult = result);
     } on ApiException catch (e) {
@@ -145,8 +144,9 @@ class _PlannerScreenState extends State<PlannerScreen> {
     });
     try {
       final result = await ApiService.instance.calcSuggestAllocation(
-        age: widget.user.age,
-        riskTolerance: _allocRisk,
+        years: int.tryParse(_sipYearsCtrl.text) ??
+            (60 - widget.user.age).clamp(1, 60),
+        risk: _allocRisk,
       );
       setState(() => _allocationResult = result);
     } on ApiException catch (e) {
@@ -318,7 +318,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Context strip
-          const _InfoStrip(
+          _InfoStrip(
             icon: Icons.savings_outlined,
             text:
                 'Enter your goal amount, timeline, and return assumptions. We\'ll calculate the SIP needed.',
@@ -330,7 +330,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
           const SizedBox(height: 24),
 
           // Form
-          const _SectionLabel(label: 'INPUTS'),
+          _SectionLabel(label: 'INPUTS'),
           const SizedBox(height: 16),
           Form(
             key: _sipFormKey,
@@ -408,7 +408,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
           // Result
           if (_sipResult != null) ...[
             const SizedBox(height: 28),
-            const _SectionLabel(label: 'RESULT'),
+            _SectionLabel(label: 'RESULT'),
             const SizedBox(height: 16),
             _ApiResultCard(rawData: _sipResult!, title: 'MONTHLY SIP REQUIRED'),
           ],
@@ -418,33 +418,45 @@ class _PlannerScreenState extends State<PlannerScreen> {
   // ══════════════════════════════════════════════════════════════════════════
   // ── TAB 1: FUTURE VALUE ────────────────────────────────────────────────────
   // Calls: POST /calculation/future_value_goal
-  // "If I invest X/month for N years at R%, what corpus will I build?"
+  // Schema: { principal, infation_rate, years }
+  // "What will my lump sum be worth in N years at X% inflation?"
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildFutureValueTab() => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _InfoStrip(
+          _InfoStrip(
             icon: Icons.show_chart,
             text:
-                'Enter a monthly investment amount to project its future value at different return rates.',
+                'Enter a lump sum amount and inflation rate to see its real future value.',
           ),
           const SizedBox(height: 24),
-
-          const _SectionLabel(label: 'INPUTS'),
+          _SectionLabel(label: 'INPUTS'),
           const SizedBox(height: 16),
           Form(
             key: _fvFormKey,
             child: Column(children: [
               _PlannerField(
-                  label: 'MONTHLY INVESTMENT',
-                  hint: 'e.g. 25000',
-                  ctrl: _fvMonthlyCtrl,
+                  label: 'PRINCIPAL AMOUNT (lump sum today)',
+                  hint: 'e.g. 1000000',
+                  ctrl: _fvPrincipalCtrl,
                   validator: (v) {
                     final n = double.tryParse(v ?? '');
                     return (n == null || n <= 0) ? 'Required' : null;
                   }),
               const SizedBox(height: 14),
               Row(children: [
+                Expanded(
+                    child: _PlannerField(
+                        label: 'INFLATION RATE (%)',
+                        hint: '6.0',
+                        ctrl: _fvInflationCtrl,
+                        validator: (v) {
+                          final n = double.tryParse(v ?? '');
+                          return (n == null || n <= 0 || n > 30)
+                              ? '0.1–30'
+                              : null;
+                        })),
+                const SizedBox(width: 14),
                 Expanded(
                     child: _PlannerField(
                         label: 'YEARS',
@@ -454,32 +466,9 @@ class _PlannerScreenState extends State<PlannerScreen> {
                           final n = double.tryParse(v ?? '');
                           return (n == null || n <= 0) ? 'Required' : null;
                         })),
-                const SizedBox(width: 14),
-                Expanded(
-                    child: _PlannerField(
-                        label: 'ANNUAL RETURN (%)',
-                        hint: '10.0',
-                        ctrl: _fvReturnCtrl,
-                        validator: (v) {
-                          final n = double.tryParse(v ?? '');
-                          return (n == null || n <= 0 || n > 30)
-                              ? '0.1–30'
-                              : null;
-                        })),
               ]),
-              const SizedBox(height: 14),
-              _PlannerField(
-                  label: 'CURRENT SAVINGS (lump sum)',
-                  hint: '0',
-                  ctrl: _fvCurrentSavingsCtrl,
-                  required: false),
             ]),
           ),
-
-          // Scenario hint
-          const SizedBox(height: 16),
-          _ScenarioHintRow(years: int.tryParse(_fvYearsCtrl.text) ?? 20),
-
           const SizedBox(height: 24),
           if (_fvError != null) ...[
             _ErrorBanner(msg: _fvError!),
@@ -489,10 +478,9 @@ class _PlannerScreenState extends State<PlannerScreen> {
               label: 'PROJECT FUTURE VALUE',
               loading: _fvLoading,
               onTap: _runFutureValue),
-
           if (_fvResult != null) ...[
             const SizedBox(height: 28),
-            const _SectionLabel(label: 'RESULT'),
+            _SectionLabel(label: 'RESULT'),
             const SizedBox(height: 16),
             _ApiResultCard(
                 rawData: _fvResult!, title: 'PROJECTED FUTURE VALUE'),
@@ -511,11 +499,11 @@ class _PlannerScreenState extends State<PlannerScreen> {
           _InfoStrip(
             icon: Icons.pie_chart_outline,
             text:
-                'Get a suggested equity/debt split based on your age (${widget.user.age}) and risk tolerance.',
+                'Get a suggested equity/debt split based on your investment horizon and risk tolerance.',
           ),
           const SizedBox(height: 24),
 
-          const _SectionLabel(label: 'RISK TOLERANCE'),
+          _SectionLabel(label: 'RISK TOLERANCE'),
           const SizedBox(height: 16),
 
           // Risk selector — full width cards
@@ -607,13 +595,14 @@ class _PlannerScreenState extends State<PlannerScreen> {
 // First numeric field → hero tile. All others → detail rows.
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Flattens nested maps one level deep (e.g. {"result": {"sip": 5000}} → {"sip": 5000})
 Map<String, dynamic> _flattenResult(Map<String, dynamic> raw) {
   final out = <String, dynamic>{};
   raw.forEach((k, v) {
     if (v is Map<String, dynamic>) {
-      v.forEach((ik, iv) => out[ik] = iv);
-    } else {
+      v.forEach((ik, iv) {
+        if (iv is! List && iv is! Map) out[ik] = iv;
+      });
+    } else if (v is! List) {
       out[k] = v;
     }
   });
@@ -629,7 +618,7 @@ String _smartFmt(String key, dynamic raw) {
   if (n == null) {
     if (s.toLowerCase() == 'true') return 'YES';
     if (s.toLowerCase() == 'false') return 'NO';
-    return s;
+    return s.length > 40 ? '${s.substring(0, 40)}…' : s;
   }
   final lk = key.toLowerCase();
   // Percentage
@@ -798,22 +787,31 @@ class _ApiResultCard extends StatelessWidget {
                         border: Border(
                             bottom: BorderSide(
                                 color: AppColors.green.withOpacity(0.06)))),
-                child: Row(children: [
-                  Expanded(
-                      flex: 3,
-                      child: Text(_keyLabel(e.value.key),
-                          style: TextStyle(
-                              fontFamily: 'Courier',
-                              fontSize: 9,
-                              letterSpacing: 1,
-                              color: AppColors.textMuted.withOpacity(0.35)))),
-                  Text(_smartFmt(e.value.key, e.value.value),
-                      style: TextStyle(
-                          fontFamily: 'Courier',
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textMuted.withOpacity(0.75))),
-                ]),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                        flex: 2,
+                        child: Text(_keyLabel(e.value.key),
+                            style: TextStyle(
+                                fontFamily: 'Courier',
+                                fontSize: 9,
+                                letterSpacing: 1,
+                                color: AppColors.textMuted.withOpacity(0.35)))),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        flex: 3,
+                        child: Text(_smartFmt(e.value.key, e.value.value),
+                            textAlign: TextAlign.right,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontFamily: 'Courier',
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.textMuted.withOpacity(0.75)))),
+                  ],
+                ),
               );
             }).toList(),
           ),
@@ -1187,8 +1185,7 @@ class _ErrorBanner extends StatelessWidget {
             border: Border.all(color: AppColors.error.withOpacity(0.4)),
             color: AppColors.error.withOpacity(0.06)),
         child: Row(children: [
-          const Icon(Icons.warning_amber_rounded,
-              color: AppColors.error, size: 16),
+          Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 16),
           const SizedBox(width: 10),
           Expanded(
               child: Text(msg,
@@ -1243,13 +1240,14 @@ class _PlannerField extends StatelessWidget {
   final String label, hint;
   final TextEditingController ctrl;
   final String? Function(String?)? validator;
-  final bool required;
-  const _PlannerField(
-      {required this.label,
-      required this.ctrl,
-      required this.hint,
-      this.validator,
-      this.required = true});
+  final bool isRequired;
+  const _PlannerField({
+    required this.label,
+    required this.ctrl,
+    required this.hint,
+    this.validator,
+    this.isRequired = true,
+  });
 
   @override
   Widget build(BuildContext context) => Column(
@@ -1269,8 +1267,9 @@ class _PlannerField extends StatelessWidget {
               FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
             ],
             validator: validator ??
-                (v) =>
-                    (required && (v == null || v.isEmpty)) ? 'Required' : null,
+                (v) => (isRequired && (v == null || v.isEmpty))
+                    ? 'Required'
+                    : null,
             style: const TextStyle(
                 fontFamily: 'Courier', fontSize: 13, color: Colors.white),
             cursorColor: AppColors.green,
@@ -1295,7 +1294,7 @@ class _PlannerField extends StatelessWidget {
                   borderRadius: BorderRadius.zero,
                   borderSide:
                       BorderSide(color: AppColors.error.withOpacity(0.6))),
-              focusedErrorBorder: const OutlineInputBorder(
+              focusedErrorBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
                   borderSide: BorderSide(color: AppColors.error)),
               errorStyle: TextStyle(

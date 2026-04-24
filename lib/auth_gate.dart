@@ -1,4 +1,4 @@
-// ignore_for_file: deprecated_member_use
+// ignore_for_file: curly_braces_in_flow_control_structures, deprecated_member_use
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -10,6 +10,10 @@ import 'user_onboarding.dart';
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Auth Gate — Login or Register choice ──────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
+// Shown when user taps SIGN IN on WelcomePage.
+// Two modes toggled by _mode:
+//   'choose'  → initial card: "New User" vs "Sign In" buttons
+//   'login'   → email + password form → POST /auth/login → MainNav
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
 
@@ -21,6 +25,7 @@ class _AuthGateState extends State<AuthGate>
     with SingleTickerProviderStateMixin {
   String _mode = 'choose'; // 'choose' | 'login'
 
+  // Login form
   final _formKey = GlobalKey<FormState>();
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
@@ -60,8 +65,6 @@ class _AuthGateState extends State<AuthGate>
   // ── POST /auth/login ──────────────────────────────────────────────────────
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
-    // FIX 1: mounted guard added before every post-async setState
-    if (!mounted) return;
     setState(() {
       _loading = true;
       _errorMsg = null;
@@ -76,15 +79,16 @@ class _AuthGateState extends State<AuthGate>
         password: _passCtrl.text.trim(),
       );
 
-      // Step 2: Decode JWT payload to extract user_id
+      // Step 2: Decode JWT payload to extract user_id (no secret needed — just base64)
+      // JWT format: header.payload.signature
       String? userId;
       try {
         final parts = jwt.split('.');
         if (parts.length == 3) {
+          // Base64url decode the payload
           String payload = parts[1];
-          while (payload.length % 4 != 0) {
-            payload += '=';
-          }
+          // Pad to multiple of 4
+          while (payload.length % 4 != 0) payload += '=';
           final decoded = String.fromCharCodes(
             base64Url.decode(payload.replaceAll('-', '+').replaceAll('_', '/')),
           );
@@ -99,10 +103,11 @@ class _AuthGateState extends State<AuthGate>
         ApiService.debugLog('JWT decode failed: $e');
       }
 
-      // Step 3: Fetch profile
+      // Step 3: Fetch profile by user ID from /user/{id}
       if (userId != null && userId.isNotEmpty) {
         await ApiService.instance.fetchProfileById(userId);
       } else {
+        // Fallback: try /auth/profile if we couldn't extract ID from JWT
         await ApiService.instance.fetchProfile();
       }
 
@@ -114,6 +119,8 @@ class _AuthGateState extends State<AuthGate>
         age: profile.age,
         currentIncome: profile.currentIncome,
         incomeRaisePct: profile.incomeRaisePct,
+        inflationRate: profile.inflationRate,
+        monthlyExpenses: profile.currentMonthlyExpenses,
         spouseAge: profile.spouseAge,
         spouseIncome: profile.spouseIncome,
         spouseIncomeRaisePct: profile.spouseIncomeRaisePct,
@@ -126,13 +133,9 @@ class _AuthGateState extends State<AuthGate>
         );
       }
     } on ApiException catch (e) {
-      // FIX 2: was bare setState — now guarded
-      if (mounted) setState(() => _errorMsg = e.message);
+      setState(() => _errorMsg = e.message);
     } catch (e) {
-      // FIX 3: was bare setState — now guarded
-      if (mounted) {
-        setState(() => _errorMsg = 'Unexpected error: ${e.toString()}');
-      }
+      setState(() => _errorMsg = 'Unexpected error: ${e.toString()}');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -167,7 +170,7 @@ class _AuthGateState extends State<AuthGate>
           SafeArea(
             child: Column(
               children: [
-                // ── Top bar ──────────────────────────────────────────────
+                // ── Top bar ────────────────────────────────────────────────
                 Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -193,11 +196,12 @@ class _AuthGateState extends State<AuthGate>
                       ]),
                     ),
                     const Spacer(),
+                    // VERDEX brand
                     Row(children: [
                       Container(
                           width: 8,
                           height: 8,
-                          decoration: const BoxDecoration(
+                          decoration: BoxDecoration(
                               shape: BoxShape.circle, color: AppColors.green)),
                       const SizedBox(width: 8),
                       const Text('VERDEX',
@@ -231,7 +235,7 @@ class _AuthGateState extends State<AuthGate>
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // ── MODE: CHOOSE ──────────────────────────────────────────────────────────
+  // ── MODE: CHOOSE ───────────────────────────────────────────────────────────
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildChooseMode() {
     return Column(
@@ -239,6 +243,7 @@ class _AuthGateState extends State<AuthGate>
       children: [
         const SizedBox(height: 32),
 
+        // Header
         Row(children: [
           Container(width: 20, height: 1, color: AppColors.green),
           const SizedBox(width: 10),
@@ -268,10 +273,12 @@ class _AuthGateState extends State<AuthGate>
 
         const SizedBox(height: 48),
 
-        // ── New User card ────────────────────────────────────────────────
+        // ── New User card ──────────────────────────────────────────────────
         GestureDetector(
-          onTap: () => Navigator.pushReplacement(context,
-              MaterialPageRoute(builder: (_) => const UserOnboardingPage())),
+          onTap: () => Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const UserOnboardingPage()),
+          ),
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.all(24),
@@ -283,32 +290,33 @@ class _AuthGateState extends State<AuthGate>
               Container(
                 width: 48,
                 height: 48,
-                color: AppColors.green,
+                decoration: BoxDecoration(
+                  color: AppColors.green,
+                ),
                 child: const Icon(Icons.person_add_outlined,
                     color: AppColors.black, size: 22),
               ),
               const SizedBox(width: 20),
               Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('NEW USER',
-                          style: TextStyle(
-                              fontFamily: 'Courier',
-                              fontSize: 14,
-                              letterSpacing: 3,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white)),
-                      const SizedBox(height: 5),
-                      Text(
-                          'Create your VerdeX profile and start planning your financial future.',
-                          style: TextStyle(
-                              fontFamily: 'Courier',
-                              fontSize: 10,
-                              height: 1.6,
-                              color: AppColors.textMuted.withOpacity(0.4))),
-                    ]),
-              ),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    const Text('NEW USER',
+                        style: TextStyle(
+                            fontFamily: 'Courier',
+                            fontSize: 14,
+                            letterSpacing: 3,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white)),
+                    const SizedBox(height: 5),
+                    Text(
+                        "Create your VerdeX profile and start planning your financial future.",
+                        style: TextStyle(
+                            fontFamily: 'Courier',
+                            fontSize: 10,
+                            height: 1.6,
+                            color: AppColors.textMuted.withOpacity(0.4))),
+                  ])),
               const SizedBox(width: 12),
               Icon(Icons.arrow_forward_ios,
                   size: 14, color: AppColors.green.withOpacity(0.5)),
@@ -318,7 +326,7 @@ class _AuthGateState extends State<AuthGate>
 
         const SizedBox(height: 16),
 
-        // ── OR divider ───────────────────────────────────────────────────
+        // ── Divider ────────────────────────────────────────────────────────
         Row(children: [
           Expanded(
               child: Container(
@@ -339,7 +347,7 @@ class _AuthGateState extends State<AuthGate>
 
         const SizedBox(height: 16),
 
-        // ── Returning User card ──────────────────────────────────────────
+        // ── Returning User card ────────────────────────────────────────────
         GestureDetector(
           onTap: () => _switchMode('login'),
           child: Container(
@@ -357,31 +365,30 @@ class _AuthGateState extends State<AuthGate>
                   border: Border.all(color: AppColors.green.withOpacity(0.4)),
                   color: AppColors.green.withOpacity(0.07),
                 ),
-                child: const Icon(Icons.lock_open_outlined,
+                child: Icon(Icons.lock_open_outlined,
                     color: AppColors.green, size: 22),
               ),
               const SizedBox(width: 20),
               Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('LOG-IN',
-                          style: TextStyle(
-                              fontFamily: 'Courier',
-                              fontSize: 14,
-                              letterSpacing: 3,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white)),
-                      const SizedBox(height: 5),
-                      Text(
-                          'Sign in with your email and password to access your dashboard.',
-                          style: TextStyle(
-                              fontFamily: 'Courier',
-                              fontSize: 10,
-                              height: 1.6,
-                              color: AppColors.textMuted.withOpacity(0.4))),
-                    ]),
-              ),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    const Text('RETURNING USER',
+                        style: TextStyle(
+                            fontFamily: 'Courier',
+                            fontSize: 14,
+                            letterSpacing: 3,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white)),
+                    const SizedBox(height: 5),
+                    Text(
+                        'Sign in with your email and password to access your dashboard.',
+                        style: TextStyle(
+                            fontFamily: 'Courier',
+                            fontSize: 10,
+                            height: 1.6,
+                            color: AppColors.textMuted.withOpacity(0.4))),
+                  ])),
               const SizedBox(width: 12),
               Icon(Icons.arrow_forward_ios,
                   size: 14, color: AppColors.green.withOpacity(0.4)),
@@ -391,26 +398,30 @@ class _AuthGateState extends State<AuthGate>
 
         const SizedBox(height: 48),
 
-        const Center(
-          child: Text('Your data is encrypted and never shared.',
-              style: TextStyle(
-                  fontFamily: 'Courier',
-                  fontSize: 9,
-                  letterSpacing: 2,
-                  color: AppColors.hintText)),
+        // Footer note
+        Center(
+          child: Text(
+            'Your data is encrypted and never shared.',
+            style: TextStyle(
+                fontFamily: 'Courier',
+                fontSize: 9,
+                letterSpacing: 2,
+                color: AppColors.textMuted.withOpacity(0.2)),
+          ),
         ),
       ],
     );
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // ── MODE: LOGIN ───────────────────────────────────────────────────────────
+  // ── MODE: LOGIN ────────────────────────────────────────────────────────────
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildLoginMode() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 32),
+
         Row(children: [
           Container(width: 20, height: 1, color: AppColors.green),
           const SizedBox(width: 10),
@@ -431,6 +442,8 @@ class _AuthGateState extends State<AuthGate>
                 height: 1.05,
                 color: Colors.white)),
         const SizedBox(height: 40),
+
+        // ── Login Form ─────────────────────────────────────────────────────
         Form(
           key: _formKey,
           child:
@@ -482,7 +495,7 @@ class _AuthGateState extends State<AuthGate>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
-                        const Icon(Icons.warning_amber_rounded,
+                        Icon(Icons.warning_amber_rounded,
                             color: AppColors.error, size: 16),
                         const SizedBox(width: 10),
                         Expanded(
@@ -494,7 +507,7 @@ class _AuthGateState extends State<AuthGate>
                                   color: AppColors.error.withOpacity(0.85))),
                         ),
                       ]),
-                      // Retry button for cold start errors
+                      // Retry button for cold start
                       if (_errorMsg!.contains('starting up') ||
                           _errorMsg!.contains('cold start')) ...[
                         const SizedBox(height: 10),
@@ -560,17 +573,17 @@ class _AuthGateState extends State<AuthGate>
             Center(
               child: GestureDetector(
                 onTap: () => Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const UserOnboardingPage())),
+                  context,
+                  MaterialPageRoute(builder: (_) => const UserOnboardingPage()),
+                ),
                 child: RichText(
                   text: TextSpan(
                     style: TextStyle(
                         fontFamily: 'Courier',
                         fontSize: 11,
                         color: AppColors.textMuted.withOpacity(0.4)),
-                    children: const [
-                      TextSpan(text: "Don't have an account?  "),
+                    children: [
+                      const TextSpan(text: "Don't have an account?  "),
                       TextSpan(
                         text: 'CREATE ONE',
                         style: TextStyle(
@@ -590,7 +603,7 @@ class _AuthGateState extends State<AuthGate>
   }
 }
 
-// ── Auth Field ────────────────────────────────────────────────────────────────
+// ── Auth Field ─────────────────────────────────────────────────────────────────
 class _AuthField extends StatelessWidget {
   final String label, hint;
   final TextEditingController ctrl;
@@ -614,11 +627,11 @@ class _AuthField extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label,
-              style: const TextStyle(
+              style: TextStyle(
                   fontFamily: 'Courier',
                   fontSize: 10,
                   letterSpacing: 3,
-                  color: AppColors.fieldLabel)),
+                  color: AppColors.green.withOpacity(0.65))),
           const SizedBox(height: 8),
           TextFormField(
             controller: ctrl,
@@ -633,13 +646,13 @@ class _AuthField extends StatelessWidget {
             cursorColor: AppColors.green,
             decoration: InputDecoration(
               hintText: hint,
-              hintStyle: const TextStyle(
+              hintStyle: TextStyle(
                   fontFamily: 'Courier',
                   fontSize: 13,
-                  color: AppColors.hintText),
+                  color: AppColors.textMuted.withOpacity(0.2)),
               suffixIcon: suffixIcon,
               filled: true,
-              fillColor: AppColors.inputFill,
+              fillColor: AppColors.blackCard,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               enabledBorder: OutlineInputBorder(
@@ -653,7 +666,7 @@ class _AuthField extends StatelessWidget {
                   borderRadius: BorderRadius.zero,
                   borderSide:
                       BorderSide(color: AppColors.error.withOpacity(0.6))),
-              focusedErrorBorder: const OutlineInputBorder(
+              focusedErrorBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
                   borderSide: BorderSide(color: AppColors.error, width: 1.5)),
               errorStyle: TextStyle(

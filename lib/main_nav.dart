@@ -3,6 +3,7 @@ import 'app_theme.dart';
 import 'screen_dashboard.dart';
 import 'screen_goals.dart';
 import 'screen_planner.dart';
+import 'screen_portfolio.dart';
 import 'screen_profile.dart';
 
 // ── Main Navigation Shell ─────────────────────────────────────────────────────
@@ -14,8 +15,10 @@ class MainNav extends StatefulWidget {
   State<MainNav> createState() => _MainNavState();
 }
 
-class _MainNavState extends State<MainNav> with SingleTickerProviderStateMixin {
+class _MainNavState extends State<MainNav> {
   int _currentIndex = 0;
+
+  void _goToGoals() => setState(() => _currentIndex = 1);
 
   late final List<Widget> _screens;
 
@@ -26,6 +29,10 @@ class _MainNavState extends State<MainNav> with SingleTickerProviderStateMixin {
       DashboardScreen(user: widget.user),
       GoalsScreen(user: widget.user),
       PlannerScreen(user: widget.user),
+      PortfolioScreen(
+        user: widget.user,
+        onCreateGoal: _goToGoals,
+      ),
       ProfileScreen(user: widget.user),
     ];
   }
@@ -34,6 +41,7 @@ class _MainNavState extends State<MainNav> with SingleTickerProviderStateMixin {
     _NavItem(icon: Icons.grid_view_rounded, label: 'HOME'),
     _NavItem(icon: Icons.flag_outlined, label: 'GOALS'),
     _NavItem(icon: Icons.bar_chart_rounded, label: 'PLANNER'),
+    _NavItem(icon: Icons.account_balance_wallet_outlined, label: 'MY PLAN'),
     _NavItem(icon: Icons.person_outline_rounded, label: 'PROFILE'),
   ];
 
@@ -41,11 +49,7 @@ class _MainNavState extends State<MainNav> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.black,
-      // Keep screens alive when switching tabs
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
+      body: IndexedStack(index: _currentIndex, children: _screens),
       bottomNavigationBar: _buildBottomNav(),
     );
   }
@@ -55,8 +59,7 @@ class _MainNavState extends State<MainNav> with SingleTickerProviderStateMixin {
       decoration: BoxDecoration(
         color: AppColors.blackMid,
         border: Border(
-          top: BorderSide(color: AppColors.green.withOpacity(0.1), width: 1),
-        ),
+            top: BorderSide(color: AppColors.green.withOpacity(0.1), width: 1)),
       ),
       child: SafeArea(
         top: false,
@@ -92,28 +95,25 @@ class _MainNavState extends State<MainNav> with SingleTickerProviderStateMixin {
                                 : Colors.transparent,
                             borderRadius: BorderRadius.circular(6),
                           ),
-                          child: Icon(
-                            _navItems[i].icon,
-                            size: 20,
-                            color: selected
-                                ? AppColors.green
-                                : AppColors.textMuted.withOpacity(0.3),
-                          ),
+                          child: Icon(_navItems[i].icon,
+                              size: 18,
+                              color: selected
+                                  ? AppColors.green
+                                  : AppColors.textMuted.withOpacity(0.3)),
                         ),
                         const SizedBox(height: 3),
-                        Text(
-                          _navItems[i].label,
-                          style: TextStyle(
-                            fontFamily: 'Courier',
-                            fontSize: 8,
-                            letterSpacing: 2,
-                            fontWeight:
-                                selected ? FontWeight.bold : FontWeight.normal,
-                            color: selected
-                                ? AppColors.green
-                                : AppColors.textMuted.withOpacity(0.3),
-                          ),
-                        ),
+                        Text(_navItems[i].label,
+                            style: TextStyle(
+                              fontFamily: 'Courier',
+                              fontSize: 7,
+                              letterSpacing: 1.5,
+                              fontWeight: selected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              color: selected
+                                  ? AppColors.green
+                                  : AppColors.textMuted.withOpacity(0.3),
+                            )),
                       ],
                     ),
                   ),

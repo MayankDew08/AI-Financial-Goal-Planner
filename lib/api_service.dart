@@ -107,8 +107,9 @@ class ApiService {
 
     final data = _handle(response);
     final t = data['access_token'] as String?;
-    if (t == null)
+    if (t == null) {
       throw const ApiException('No access_token in login response');
+    }
     token = t;
     return t;
   }
@@ -156,9 +157,10 @@ class ApiService {
   // Call fetchProfile() first, then this converts it to the Flutter model.
   UserProfileFromApi buildUserProfile() {
     final p = cachedProfile;
-    if (p == null)
+    if (p == null) {
       throw const ApiException(
           'Profile not loaded. Call fetchProfile() first.');
+    }
 
     return UserProfileFromApi(
       id: p['id']?.toString() ?? '',
@@ -281,6 +283,104 @@ class ApiService {
     return data['explanation'] as String? ?? '';
   }
 
+  // ── POST /goals/recurring_goal ───────────────────────────────────────────────
+  Future<Map<String, dynamic>> postRecurringGoal({
+    required String goalName,
+    required double currentCost,
+    required double yearsToFirst,
+    required double frequencyYears,
+    required int numOccurrences,
+    double goalInflationPct = 6.0,
+    double expectedReturnPct = 10.0,
+    double existingCorpus = 0.0,
+  }) async {
+    _requireToken();
+
+    final response = await http.post(
+      Uri.parse('$kBaseUrl/goals/recurring_goal'),
+      headers: _formHeaders,
+      body: {
+        'goal_name': goalName,
+        'current_cost': currentCost.toString(),
+        'years_to_first': yearsToFirst.toString(),
+        'frequency_years': frequencyYears.toString(),
+        'num_occurrences': numOccurrences.toString(),
+        'goal_inflation_pct': goalInflationPct.toString(),
+        'expected_return_pct': expectedReturnPct.toString(),
+        'existing_corpus': existingCorpus.toString(),
+      },
+    );
+
+    return _handle(response);
+  }
+
+  // ── GET /goals/profile_overview — full portfolio snapshot ────────────────────
+  // Returns: { profile, goals: { retirement, onetime, recurring }, conflict_summary, last_updated }
+  Future<Map<String, dynamic>> fetchProfileOverview() async {
+    _requireToken();
+    final response = await http.get(
+      Uri.parse('$kBaseUrl/goals/profile_overview'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    debugLog('<<< OVERVIEW STATUS: ${response.statusCode}');
+    debugLog(
+        '<<< OVERVIEW BODY:   ${response.body.substring(0, response.body.length.clamp(0, 400))}');
+    return _handle(response);
+  }
+
+  // ── GET /goals/retirement ─────────────────────────────────────────────────────
+  Future<Map<String, dynamic>?> fetchRetirementGoal() async {
+    _requireToken();
+    final response = await http.get(
+      Uri.parse('$kBaseUrl/goals/retirement'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 404) return null;
+    return _handle(response);
+  }
+
+  // ── GET /goals/one_time_goal ──────────────────────────────────────────────────
+  Future<List<dynamic>> fetchOneTimeGoals() async {
+    _requireToken();
+    final response = await http.get(
+      Uri.parse('$kBaseUrl/goals/one_time_goal'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    final data = _handle(response);
+    return data['goals'] as List? ?? (data['data'] as List? ?? [data]);
+  }
+
+  // ── GET /goals/recurring_goal ─────────────────────────────────────────────────
+  Future<List<dynamic>> fetchRecurringGoals() async {
+    _requireToken();
+    final response = await http.get(
+      Uri.parse('$kBaseUrl/goals/recurring_goal'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    final data = _handle(response);
+    return data['goals'] as List? ?? (data['data'] as List? ?? [data]);
+  }
+
+  // ── DELETE /goals/one_time_goal/{goal_id} ─────────────────────────────────────
+  Future<void> deleteOneTimeGoal(String goalId) async {
+    _requireToken();
+    final response = await http.delete(
+      Uri.parse('$kBaseUrl/goals/one_time_goal/$goalId'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    _handle(response);
+  }
+
+  // ── DELETE /goals/recurring_goal/{goal_id} ────────────────────────────────────
+  Future<void> deleteRecurringGoal(String goalId) async {
+    _requireToken();
+    final response = await http.delete(
+      Uri.parse('$kBaseUrl/goals/recurring_goal/$goalId'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    _handle(response);
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
   void _requireToken() {
@@ -354,22 +454,20 @@ class ApiService {
   // ══════════════════════════════════════════════════════════════════════════
 
   // POST /calculation/future_value_goal
-  // Answers: "If I invest X/month for N years at R%, what will I have?"
-  // Schema: FutureValue { monthly_investment, annual_return, years, current_savings? }
+  // Schema: FutureValue { principal, infation_rate (typo in backend), years }
+  // Answers: "What is the inflation-adjusted future value of a lump sum?"
   Future<Map<String, dynamic>> calcFutureValue({
-    required double monthlyInvestment,
-    required double annualReturn,
+    required double principal,
+    required double inflationRate,
     required double years,
-    double currentSavings = 0,
   }) async {
     final response = await http.post(
       Uri.parse('$kBaseUrl/calculation/future_value_goal'),
       headers: _jsonHeaders,
       body: jsonEncode({
-        'monthly_investment': monthlyInvestment,
-        'annual_return': annualReturn,
+        'principal': principal,
+        'infation_rate': inflationRate, // backend typo — keep as-is
         'years': years,
-        'current_savings': currentSavings,
       }),
     );
     return _handle(response);
@@ -422,13 +520,83 @@ class ApiService {
     return _handle(response);
   }
 
+  // Schema: SuggestedAllocation { years, risk }
+  // Response keys: equity_allocation, debt_allocation
+  Future<Map<String, dynamic>> calcSuggestAllocation({
+    required int years, // years until goal (not age)
+    required String risk, // 'conservative' | 'moderate' | 'aggressive'
+  }) async {
+    final response = await http.post(
+      Uri.parse('$kBaseUrl/calculation/suggest_allocation'),
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'years': years,
+        'risk': risk,
+      }),
+    );
+    return _handle(response);
+  }
+
+  // POST /calculation/check_feasibility
+  // Schema: CheckFeasibilityRequest {
+  //   starting_monthly_sip, annual_step_up_pct, monthly_income, income_raise_pct,
+  //   monthly_expenses, years_to_goal, existing_monthly_sip, savings_cap_pct }
+  Future<Map<String, dynamic>> calcCheckFeasibility({
+    required double startingMonthlySip,
+    required double annualStepUpPct,
+    required double monthlyIncome,
+    required double incomeRaisePct,
+    required double monthlyExpenses,
+    required double yearsToGoal,
+    double existingMonthlySip = 0,
+    double savingsCapPct = 50,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$kBaseUrl/calculation/check_feasibility'),
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'starting_monthly_sip': startingMonthlySip,
+        'annual_step_up_pct': annualStepUpPct,
+        'monthly_income': monthlyIncome,
+        'income_raise_pct': incomeRaisePct,
+        'monthly_expenses': monthlyExpenses,
+        'years_to_goal': yearsToGoal,
+        'existing_monthly_sip': existingMonthlySip,
+        'savings_cap_pct': savingsCapPct,
+      }),
+    );
+    return _handle(response);
+  }
+
+  // POST /calculation/glide-path
+  // Schema: GlidePathRequest { current_age, goal_age, start_equity_percent, end_equity_percent }
+  // Constraint: goal_age > current_age, start_equity >= end_equity
+  Future<Map<String, dynamic>> calcGlidePath({
+    required int currentAge,
+    required int goalAge,
+    required double startEquityPercent,
+    required double endEquityPercent,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$kBaseUrl/calculation/glide-path'),
+      headers: _jsonHeaders,
+      body: jsonEncode({
+        'current_age': currentAge,
+        'goal_age': goalAge,
+        'start_equity_percent': startEquityPercent,
+        'end_equity_percent': endEquityPercent,
+      }),
+    );
+    return _handle(response);
+  }
+
   // POST /calculation/blended_return
-  // Schema: BlendedReturn { equity_pct, debt_pct, equity_return, debt_return }
+  // Schema: BlendedReturn { equity_pct, debt_pct, return_equity, return_debt }
   Future<Map<String, dynamic>> calcBlendedReturn({
     required double equityPct,
     required double debtPct,
-    required double equityReturn,
-    required double debtReturn,
+    required double returnEquity,
+    required double returnDebt,
   }) async {
     final response = await http.post(
       Uri.parse('$kBaseUrl/calculation/blended_return'),
@@ -436,65 +604,8 @@ class ApiService {
       body: jsonEncode({
         'equity_pct': equityPct,
         'debt_pct': debtPct,
-        'equity_return': equityReturn,
-        'debt_return': debtReturn,
-      }),
-    );
-    return _handle(response);
-  }
-
-  // POST /calculation/suggest_allocation
-  // Schema: SuggestedAllocation { age, risk_tolerance }
-  Future<Map<String, dynamic>> calcSuggestAllocation({
-    required int age,
-    required String riskTolerance, // 'conservative' | 'moderate' | 'aggressive'
-  }) async {
-    final response = await http.post(
-      Uri.parse('$kBaseUrl/calculation/suggest_allocation'),
-      headers: _jsonHeaders,
-      body: jsonEncode({
-        'age': age,
-        'risk_tolerance': riskTolerance,
-      }),
-    );
-    return _handle(response);
-  }
-
-  // POST /calculation/check_feasibility
-  // Schema: CheckFeasibilityRequest { monthly_sip, annual_return, years, target_corpus }
-  Future<Map<String, dynamic>> calcCheckFeasibility({
-    required double monthlySip,
-    required double annualReturn,
-    required double years,
-    required double targetCorpus,
-  }) async {
-    final response = await http.post(
-      Uri.parse('$kBaseUrl/calculation/check_feasibility'),
-      headers: _jsonHeaders,
-      body: jsonEncode({
-        'monthly_sip': monthlySip,
-        'annual_return': annualReturn,
-        'years': years,
-        'target_corpus': targetCorpus,
-      }),
-    );
-    return _handle(response);
-  }
-
-  // POST /calculation/glide-path
-  // Schema: GlidePathRequest { current_age, retirement_age, current_equity_pct }
-  Future<Map<String, dynamic>> calcGlidePath({
-    required int currentAge,
-    required int retirementAge,
-    required double currentEquityPct,
-  }) async {
-    final response = await http.post(
-      Uri.parse('$kBaseUrl/calculation/glide-path'),
-      headers: _jsonHeaders,
-      body: jsonEncode({
-        'current_age': currentAge,
-        'retirement_age': retirementAge,
-        'current_equity_pct': currentEquityPct,
+        'return_equity': returnEquity,
+        'return_debt': returnDebt,
       }),
     );
     return _handle(response);
