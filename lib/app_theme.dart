@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 
 // ── App Colors ────────────────────────────────────────────────────────────────
@@ -11,39 +13,54 @@ class AppColors {
   static const Color textMuted = Color(0xFFC8F0D5);
   static const Color error = Color(0xFFFF4F4F);
 
-  static Color? get inputFill => null;
-
-  static Color? get hintText => null;
+  // Filled in — previously null, which caused invisible inputs
+  static Color get inputFill => blackCard;
+  static Color get hintText => textMuted.withOpacity(0.45);
 }
 
 // ── Shared TextStyles ─────────────────────────────────────────────────────────
 class AppText {
   static const mono = 'Courier';
 
+  /// Uppercase label / caption text (e.g. section headers, tags)
+  /// Size bumped 10 → 13, opacity 0.65 → 0.80 for legibility
   static TextStyle label(
-          {double size = 10, double spacing = 3, Color? color}) =>
+          {double size = 13, double spacing = 2.5, Color? color}) =>
       TextStyle(
         fontFamily: mono,
         fontSize: size,
         letterSpacing: spacing,
-        color: color ?? AppColors.green.withOpacity(0.65),
+        color: color ?? AppColors.green.withOpacity(0.80),
       );
 
-  static TextStyle heading({double size = 28, Color color = Colors.white}) =>
+  /// Primary headings — size bumped 28 → 32
+  static TextStyle heading({double size = 32, Color color = Colors.white}) =>
       TextStyle(
         fontFamily: mono,
         fontSize: size,
         fontWeight: FontWeight.w900,
-        letterSpacing: 2,
+        letterSpacing: 1.5, // slightly tighter — less gap between letters
         color: color,
-        height: 1.05,
+        height: 1.1,
       );
 
-  static TextStyle body({double size = 12, Color? color}) => TextStyle(
+  /// Body / paragraph text
+  /// Size bumped 12 → 15, opacity lifted 0.5 → 0.85 — the biggest readability win
+  static TextStyle body({double size = 15, Color? color}) => TextStyle(
         fontFamily: mono,
         fontSize: size,
-        height: 1.7,
-        color: color ?? AppColors.textMuted.withOpacity(0.5),
+        height: 1.65,
+        color: color ?? AppColors.textMuted.withOpacity(0.85),
+      );
+
+  /// New: small numeric / data value style (dashboards, stats)
+  static TextStyle data({double size = 22, Color? color}) => TextStyle(
+        fontFamily: mono,
+        fontSize: size,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1,
+        color: color ?? AppColors.green,
+        height: 1.2,
       );
 }
 
@@ -93,7 +110,7 @@ class GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = AppColors.green.withOpacity(0.025)
+      ..color = AppColors.green.withOpacity(0.03) // slightly more visible
       ..strokeWidth = 1;
     const step = 40.0;
     for (double x = 0; x < size.width; x += step) {

@@ -1,5 +1,6 @@
-// ignore_for_file: unused_local_variable, deprecated_member_use
+// ignore_for_file: deprecated_member_use
 
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'app_theme.dart';
 import 'api_service.dart';
@@ -159,9 +160,21 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     final ov = _overview!;
     final goals = ov['goals'] as Map<String, dynamic>? ?? {};
     final conflict = ov['conflict_summary'] as Map<String, dynamic>? ?? {};
-    final retirement = goals['retirement'] as Map<String, dynamic>?;
-    final oneTimeRaw = goals['onetime'] as List? ?? [];
-    final recurringRaw = goals['recurring'] as List? ?? [];
+
+    // Backend stores plan_data as a JSON STRING in the DB.
+    // Decode it so nested fields like glide_path are accessible as Maps.
+    final retirement =
+        _decodePlanData(goals['retirement'] as Map<String, dynamic>?);
+    final oneTimeRaw = (goals['onetime'] as List? ?? [])
+        .map((g) =>
+            _decodePlanData(g as Map<String, dynamic>?) ??
+            (g as Map<String, dynamic>))
+        .toList();
+    final recurringRaw = (goals['recurring'] as List? ?? [])
+        .map((g) =>
+            _decodePlanData(g as Map<String, dynamic>?) ??
+            (g as Map<String, dynamic>))
+        .toList();
 
     final hasAnyGoal =
         retirement != null || oneTimeRaw.isNotEmpty || recurringRaw.isNotEmpty;
@@ -179,21 +192,18 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
             _buildHeader(),
             const SizedBox(height: 4),
 
-            // ── Combined Portfolio Stats (from widget_portfolio_stats.dart) ──
+// ── Portfolio Analytics Dashboard ───────────────────────────
             if (hasAnyGoal) ...[
-              PortfolioStatsWidget(
-                user: widget.user,
-                retirement: retirement,
-                oneTimeGoals: oneTimeRaw,
-                recurringGoals: recurringRaw,
-                conflict: conflict,
+              SizedBox(
+                width: double.infinity,
+                child: PortfolioStatsWidget(
+                  user: widget.user,
+                  retirement: retirement,
+                  oneTimeGoals: oneTimeRaw,
+                  recurringGoals: recurringRaw,
+                  conflict: conflict,
+                ),
               ),
-              const SizedBox(height: 24),
-            ],
-
-            // ── Conflict / health banner ─────────────────────────────────
-            if (conflict.isNotEmpty) ...[
-              _ConflictBanner(data: conflict),
               const SizedBox(height: 24),
             ],
 
@@ -216,7 +226,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                     label: 'ONE-TIME GOALS', icon: Icons.flag_outlined),
                 const SizedBox(height: 12),
                 ...oneTimeRaw.map((g) {
-                  final gm = g as Map<String, dynamic>;
+                  final gm = g;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: _OneTimeGoalCard(
@@ -235,7 +245,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                     label: 'RECURRING GOALS', icon: Icons.repeat_rounded),
                 const SizedBox(height: 12),
                 ...recurringRaw.map((g) {
-                  final gm = g as Map<String, dynamic>;
+                  final gm = g;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: _RecurringGoalCard(
@@ -250,6 +260,12 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
             ],
 
             // ── Add goal CTA ─────────────────────────────────────────────
+            // ── Conflict summary after all goals ────────────────────────
+            if (conflict.isNotEmpty) ...[
+              _ConflictBanner(data: conflict),
+              const SizedBox(height: 24),
+            ],
+
             const SizedBox(height: 8),
             _AddGoalButton(onTap: widget.onCreateGoal),
           ],
@@ -438,6 +454,7 @@ class _ConflictBanner extends StatelessWidget {
     final isGood = status == 'all_clear';
     final isWarn =
         status.contains('warning') || status.contains('under_saving');
+    // ignore: unused_local_variable
     final isConflict = status.contains('conflict');
 
     final color = isGood
@@ -710,7 +727,6 @@ class _RetirementDetail extends StatelessWidget {
   Widget build(BuildContext context) {
     final corpus = plan['corpus'] as Map<String, dynamic>? ?? {};
     final feasibility = plan['feasibility'] as Map<String, dynamic>? ?? {};
-    // glide_path can be a List, Map, or nested — GlidePathWidget handles all shapes
     final glideRaw = plan['glide_path'];
     final buckets = plan['buckets'] as Map<String, dynamic>?;
 
@@ -720,6 +736,7 @@ class _RetirementDetail extends StatelessWidget {
         _DetailSection(title: 'FEASIBILITY', data: feasibility),
       if (glideRaw != null) GlidePathWidget(raw: glideRaw),
       if (buckets != null && buckets.isNotEmpty) _BucketsSection(data: buckets),
+      // Debug: shows raw API keys — remove once data displays correctly
     ]);
   }
 }
@@ -1181,8 +1198,9 @@ class _AllocationBar extends StatelessWidget {
       final lk = k.toLowerCase();
       final n = num.tryParse(v?.toString() ?? '')?.toDouble() ?? 0;
       if (lk.contains('equity')) equity = n > 1 ? n : n * 100;
-      if (lk.contains('debt') || lk.contains('bond'))
+      if (lk.contains('debt') || lk.contains('bond')) {
         debt = n > 1 ? n : n * 100;
+      }
     });
     if (equity > 0 && debt == 0) debt = 100 - equity;
     if (equity == 0 && debt == 0) return const SizedBox();
@@ -1428,6 +1446,54 @@ class _AddGoalButton extends StatelessWidget {
           ]),
         ),
       );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── Plan data decoder ──────────────────────────────────────────────────────────
+// Backend stores plan_data as a JSON string inside the DB row.
+// This decodes it so nested fields (glide_path, corpus, etc.) are Maps not strings.
+// ══════════════════════════════════════════════════════════════════════════════
+Map<String, dynamic>? _decodePlanData(Map<String, dynamic>? raw) {
+  if (raw == null) return null;
+  final result = Map<String, dynamic>.from(raw);
+
+  // Try to decode 'plan_data' field if it's a JSON string
+  final planData = result['plan_data'];
+  if (planData is String && planData.isNotEmpty) {
+    try {
+      final decoded = jsonDecode(planData) as Map<String, dynamic>?;
+      if (decoded != null) {
+        // Merge decoded plan_data into the top-level map
+        // so plan['status'], plan['glide_path'] etc. all work
+        result['plan'] = decoded;
+        decoded.forEach((k, v) => result.putIfAbsent(k, () => v));
+      }
+    } catch (_) {}
+  }
+
+  // Also decode 'plan' if it's a JSON string
+  final plan = result['plan'];
+  if (plan is String && plan.isNotEmpty) {
+    try {
+      final decoded = jsonDecode(plan) as Map<String, dynamic>?;
+      if (decoded != null) result['plan'] = decoded;
+    } catch (_) {}
+  }
+
+  // Recursively decode glide_path if it's a string
+  final gp = result['glide_path'] ?? (result['plan'] as Map?)?['glide_path'];
+  if (gp is String && gp.isNotEmpty) {
+    try {
+      final decoded = jsonDecode(gp);
+      if (result.containsKey('glide_path')) {
+        result['glide_path'] = decoded;
+      } else if (result['plan'] is Map) {
+        (result['plan'] as Map<String, dynamic>)['glide_path'] = decoded;
+      }
+    } catch (_) {}
+  }
+
+  return result;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
