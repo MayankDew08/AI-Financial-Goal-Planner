@@ -331,10 +331,16 @@ async def endpoint_recurring_goal(
     db: Session = Depends(get_db),
     ):
     logger.info({
-        "event": "recurring_goal_request",
-        "user_id": current_user.id if current_user else None,
-        "goal_name": goal_name,
-    })
+    "event": "recurring_goal_success",
+    "user_id": current_user.id,
+    "goal_name": goal_name,
+    "plan_status": plan.get("status") if isinstance(plan, dict) else None,
+})
+
+return {
+    "plan": plan,
+    "conflict": conflict_results
+}
 
     # User already fetched from DB by get_current_user dependency
     if not current_user:
