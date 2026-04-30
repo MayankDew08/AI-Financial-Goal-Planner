@@ -8,6 +8,7 @@ from app.routes.user import router as user_router
 from app.routes.goals import router as goals_router
 from app.routes.chat import router as chat_router
 import logging
+import threading
 
 logger = logging.getLogger("startup")
 
@@ -27,29 +28,27 @@ app.include_router(goals_router)
 app.include_router(auth_router)
 app.include_router(chat_router)
 
+_db_initialized = False
+
+def _init_db():
+    global _db_initialized
+    try:
+        logger.info("Background: Starting database initialization...")
+        Base.metadata.create_all(bind=engine)
+        _db_initialized = True
+        logger.info({"event": "database_ready", "status": "ok"})
+    except Exception as db_error:
+        _db_initialized = False
+        logger.error({
+            "event": "database_init_failed",
+            "error": str(db_error)[:300]
+        })
 
 @app.on_event("startup")
 def startup_event():
-    # Database setup with better error handling
-    try:
-        Base.metadata.create_all(bind=engine)
-        logger.info({"event": "database_ready", "status": "ok"})
-    except Exception as db_error:
-        error_msg = str(db_error)
-        if "ENOTFOUND" in error_msg or "not found" in error_msg:
-            logger.error({
-                "event": "database_connection_failed",
-                "error": "Supabase credentials are invalid or expired",
-                "action_required": "Update SQLALCHEMY_DATABASE_URL in .env with fresh credentials",
-                "details": error_msg[:200]
-            })
-        else:
-            logger.error({
-                "event": "database_connection_failed",
-                "error": str(db_error)
-            })
-        # Don't crash on startup - let it continue so you can debug
-        logger.warning("⚠️ Database not available. API is running but DB operations will fail.")
+    # Start DB init in background (don't block startup)
+    db_thread = threading.Thread(target=_init_db, daemon=True)
+    db_thread.start()
     
     # Health check Redis
     try:
@@ -67,7 +66,6 @@ def startup_event():
 def read_root():
     return {"Message": "Welcome to Financial Planning API"}
 
-
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "database_initialized": _db_initialized}
