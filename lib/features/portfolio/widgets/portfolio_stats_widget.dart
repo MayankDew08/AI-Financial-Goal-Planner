@@ -1,9 +1,8 @@
 // ignore_for_file: deprecated_member_use
 
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'app_theme.dart';
+import '../../../core/theme/app_theme.dart';
 
 class PortfolioStatsWidget extends StatelessWidget {
   final UserProfile user;
@@ -356,12 +355,55 @@ class _GoalStats {
     required IconData icon,
   }) {
     final plan = data['plan'] ?? data;
+    print(plan);
+    double sip = 0;
+    double corpus = 0;
+
+    // 🟢 RETIREMENT
+    if (plan.containsKey('corpus')) {
+      final c = plan['corpus'] ?? {};
+
+      sip = (c['monthly_sip'] ??
+              c['starting_monthly_sip'] ??
+              c['required_sip'] ??
+              0)
+          .toDouble();
+
+      corpus = (c['required_corpus'] ?? 0).toDouble();
+    }
+
+    // 🟡 ONE-TIME GOAL
+    else if (plan.containsKey('goal_summary')) {
+      final sipPlan = plan['sip_plan'] ?? {};
+      final summary = plan['goal_summary'] ?? {};
+
+      sip = (sipPlan['starting_monthly_sip'] ??
+              sipPlan['monthly_sip'] ??
+              sipPlan['total_monthly_sip'] ??
+              0)
+          .toDouble();
+
+      corpus = (summary['goal_amount_at_target'] ??
+              summary['goal_amount_today'] ??
+              0)
+          .toDouble();
+    }
+
+    // 🔵 RECURRING GOAL
+    else if (plan.containsKey('sip_plan')) {
+      final sipPlan = plan['sip_plan'] ?? {};
+
+      sip = (sipPlan['total_monthly_sip'] ?? 0).toDouble();
+
+      // recurring usually doesn’t have corpus → keep 0
+      corpus = 0;
+    }
 
     return _GoalStats(
       name: plan['goal_name'] ?? defaultName,
       icon: icon,
-      monthlySip: (plan['monthly_sip'] ?? 0).toDouble(),
-      targetCorpus: (plan['target_corpus'] ?? 0).toDouble(),
+      monthlySip: sip,
+      targetCorpus: corpus,
       isFeasible: plan['status'] == "feasible",
     );
   }

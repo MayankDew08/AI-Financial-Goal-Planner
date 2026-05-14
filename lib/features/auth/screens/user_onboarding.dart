@@ -2,9 +2,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'app_theme.dart';
-import 'main_nav.dart';
-import 'api_service.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../main_nav.dart';
+import '../../../core/api/api_service.dart';
 
 // ── Onboarding Page ───────────────────────────────────────────────────────────
 class UserOnboardingPage extends StatefulWidget {

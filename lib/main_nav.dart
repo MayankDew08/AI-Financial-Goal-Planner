@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'app_theme.dart';
-import 'screen_dashboard.dart';
-import 'screen_goals.dart';
-import 'screen_planner.dart';
-import 'screen_portfolio.dart';
-import 'screen_profile.dart';
+import 'core/theme/app_theme.dart';
+import 'features/dashboard/screens/dashboard_screen.dart';
+import 'features/goals/screens/goals_screen.dart';
+import 'features/planner/screens/planner_screen.dart';
+import 'features/portfolio/screens/portfolio_screen.dart';
+import 'features/profile/screens/profile_screen.dart';
 
 // ── Main Navigation Shell ─────────────────────────────────────────────────────
 class MainNav extends StatefulWidget {

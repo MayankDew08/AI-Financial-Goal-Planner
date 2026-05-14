@@ -2,8 +2,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'app_theme.dart';
-import 'api_service.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../core/api/api_service.dart';
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Planner Screen ─────────────────────────────────────────────────────────────

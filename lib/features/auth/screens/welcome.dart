@@ -1,7 +1,7 @@
 // ignore_for_file: deprecated_member_use
 
 import 'package:flutter/material.dart';
-import 'app_theme.dart';
+import '../../../core/theme/app_theme.dart';
 import 'auth_gate.dart';
 
 class FinanceApp extends StatelessWidget {

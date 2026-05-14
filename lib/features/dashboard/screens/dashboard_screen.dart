@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'app_theme.dart';
+import '../../../core/theme/app_theme.dart';
 
 // ── UserProfile model (required by DashboardScreen) ──────────────────────────
 // If this is defined elsewhere, remove this block and import it instead.
