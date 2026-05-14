@@ -497,6 +497,14 @@ def build_ai_payload(plan: dict) -> dict:
                           plan.get("buckets", {}).get("retirement_duration_years", 0),
     }
 
+    def _bucket_field(bucket_obj: Any, field_name: str) -> float:
+        if isinstance(bucket_obj, dict):
+            return float(bucket_obj.get(field_name, 0.0) or 0.0)
+        return float(getattr(bucket_obj, field_name, 0.0) or 0.0)
+
+    bucket_1 = buckets.get("bucket_1", {}) if isinstance(buckets, dict) else {}
+    bucket_2 = buckets.get("bucket_2", {}) if isinstance(buckets, dict) else {}
+    bucket_3 = buckets.get("bucket_3", {}) if isinstance(buckets, dict) else {}
     return {
         "user_profile": user_profile,
         "plan_summary": {
@@ -522,15 +530,15 @@ def build_ai_payload(plan: dict) -> dict:
             for item in glide_path.get("yearly_schedule", [])
         ],
         "bucket_summary": {
-            "bucket_1_size": format_inr(buckets["bucket_1"]["size"]),
-            "bucket_1_equity": format_inr(buckets["bucket_1"]["equity_amount"]),
-            "bucket_1_debt": format_inr(buckets["bucket_1"]["debt_amount"]),
-            "bucket_2_size": format_inr(buckets["bucket_2"]["size"]),
-            "bucket_2_equity": format_inr(buckets["bucket_2"]["equity_amount"]),
-            "bucket_2_debt": format_inr(buckets["bucket_2"]["debt_amount"]),
-            "bucket_3_size": format_inr(buckets["bucket_3"]["size"]),
-            "bucket_3_equity": format_inr(buckets["bucket_3"]["equity_amount"]),
-            "bucket_3_debt": format_inr(buckets["bucket_3"]["debt_amount"]),
+            "bucket_1_size": format_inr(_bucket_field(bucket_1, "size")),
+            "bucket_1_equity": format_inr(_bucket_field(bucket_1, "equity_amount")),
+            "bucket_1_debt": format_inr(_bucket_field(bucket_1, "debt_amount")),
+            "bucket_2_size": format_inr(_bucket_field(bucket_2, "size")),
+            "bucket_2_equity": format_inr(_bucket_field(bucket_2, "equity_amount")),
+            "bucket_2_debt": format_inr(_bucket_field(bucket_2, "debt_amount")),
+            "bucket_3_size": format_inr(_bucket_field(bucket_3, "size")),
+            "bucket_3_equity": format_inr(_bucket_field(bucket_3, "equity_amount")),
+            "bucket_3_debt": format_inr(_bucket_field(bucket_3, "debt_amount")),
         }
     }
 
@@ -644,13 +652,23 @@ def explain_retirement_plan_with_ai(
         return f"Error generating AI explanation: {str(e)}"
     
 
-def save_retirement_plan(db, user_id: str, plan: dict, retirement_age: int):
+def save_retirement_plan(db, user_id: str, plan: dict | str, retirement_age: int):
     from app.models.db import RetirementPlan
-    plan_json = json.dumps(_json_safe(plan), default=str)
+    
+    # Handle both dict and JSON string inputs
+    if isinstance(plan, str):
+        try:
+            plan_dict = json.loads(plan)
+        except json.JSONDecodeError:
+            plan_dict = {}
+        plan_json = plan
+    else:
+        plan_dict = plan
+        plan_json = json.dumps(_json_safe(plan), default=str)
 
-    corpus_required = plan.get("corpus", {}).get("corpus_required")
-    monthly_sip_required = plan.get("corpus", {}).get("additional_monthly_sip_required")
-    status = plan.get("status")
+    corpus_required = plan_dict.get("corpus", {}).get("corpus_required")
+    monthly_sip_required = plan_dict.get("corpus", {}).get("additional_monthly_sip_required")
+    status = plan_dict.get("status")
 
     plan_record = RetirementPlan(
         user_id=user_id,
@@ -1031,6 +1049,39 @@ def explain_one_time_goal_with_ai(
 def save_one_time_goal_plan(db, user_id: str, plan: dict):
     from app.models.db import OneTimeGoalPlan, RecurringGoalPlan
 
+    goal_name = (plan.get("goal_name") or "Unnamed Goal").strip()
+    plan_json = json.dumps(plan, default=str)
+    target_amount = plan.get("goal_summary", {}).get("goal_amount_today", 0.0)
+    future_value = plan.get("goal_summary", {}).get("goal_amount_at_target", 0.0)
+    monthly_sip_required = plan.get("sip_plan", {}).get("starting_monthly_sip", 0.0)
+    time_horizon_years = int(plan.get("goal_summary", {}).get("years_to_goal", 0))
+    status = plan.get("status", "unknown")
+
+    existing_same_name = db.query(OneTimeGoalPlan).filter(
+        OneTimeGoalPlan.user_id == user_id,
+        OneTimeGoalPlan.goal_name == goal_name,
+        OneTimeGoalPlan.is_active == True,
+    ).order_by(OneTimeGoalPlan.created_at.desc()).all()
+
+    if existing_same_name:
+        # Keep one active row per goal name and overwrite it in place.
+        plan_record = existing_same_name[0]
+        plan_record.goal_data = plan_json
+        plan_record.goal_name = goal_name
+        plan_record.target_amount = target_amount
+        plan_record.future_value = future_value
+        plan_record.monthly_sip_required = monthly_sip_required
+        plan_record.time_horizon_years = time_horizon_years
+        plan_record.status = status
+        plan_record.is_active = True
+
+        for duplicate in existing_same_name[1:]:
+            duplicate.is_active = False
+
+        db.commit()
+        db.refresh(plan_record)
+        return plan_record
+
     max_one_time_priority = db.query(OneTimeGoalPlan.priority).filter(
         OneTimeGoalPlan.user_id == user_id,
         OneTimeGoalPlan.is_active == True,
@@ -1046,18 +1097,15 @@ def save_one_time_goal_plan(db, user_id: str, plan: dict):
         max_recurring_priority[0] if max_recurring_priority and max_recurring_priority[0] is not None else 1,
     ) + 1
     
-    # Convert plan to JSON string for storage
-    plan_json = json.dumps(plan, default=str)
-    
     plan_record = OneTimeGoalPlan(
         user_id=user_id,
         goal_data=plan_json,
-        goal_name=plan.get("goal_name", "Unnamed Goal"),
-        target_amount=plan.get("goal_summary", {}).get("goal_amount_today", 0.0),
-        future_value=plan.get("goal_summary", {}).get("goal_amount_at_target", 0.0),
-        monthly_sip_required=plan.get("sip_plan", {}).get("starting_monthly_sip", 0.0),
-        time_horizon_years=int(plan.get("goal_summary", {}).get("years_to_goal", 0)),
-        status=plan.get("status", "unknown"),
+        goal_name=goal_name,
+        target_amount=target_amount,
+        future_value=future_value,
+        monthly_sip_required=monthly_sip_required,
+        time_horizon_years=time_horizon_years,
+        status=status,
         is_active=True,
         priority=next_priority
     )
@@ -1070,6 +1118,42 @@ def save_one_time_goal_plan(db, user_id: str, plan: dict):
 def save_recurring_goal_plan(db, user_id: str, plan: dict):
     from app.models.db import OneTimeGoalPlan, RecurringGoalPlan
 
+    goal_name = (plan.get("goal_name") or "Unnamed Goal").strip()
+    plan_json = json.dumps(plan, default=str)
+
+    # Use first occurrence as quick target amount and planning years for dashboard fields.
+    first_occurrence = (plan.get("sip_plan", {}).get("occurrence_plans") or [{}])[0]
+    target_amount = first_occurrence.get("cost_at_target", 0.0)
+    future_value = first_occurrence.get("cost_at_target", 0.0)
+    monthly_sip_required = plan.get("sip_plan", {}).get("total_monthly_sip", 0.0)
+    time_horizon_years = int(plan.get("goal_summary", {}).get("total_planning_years", 0))
+    status = plan.get("status", "unknown")
+
+    existing_same_name = db.query(RecurringGoalPlan).filter(
+        RecurringGoalPlan.user_id == user_id,
+        RecurringGoalPlan.goal_name == goal_name,
+        RecurringGoalPlan.is_active == True,
+    ).order_by(RecurringGoalPlan.created_at.desc()).all()
+
+    if existing_same_name:
+        # Keep one active row per goal name and overwrite it in place.
+        plan_record = existing_same_name[0]
+        plan_record.goal_data = plan_json
+        plan_record.goal_name = goal_name
+        plan_record.target_amount = target_amount
+        plan_record.future_value = future_value
+        plan_record.monthly_sip_required = monthly_sip_required
+        plan_record.time_horizon_years = time_horizon_years
+        plan_record.status = status
+        plan_record.is_active = True
+
+        for duplicate in existing_same_name[1:]:
+            duplicate.is_active = False
+
+        db.commit()
+        db.refresh(plan_record)
+        return plan_record
+
     max_one_time_priority = db.query(OneTimeGoalPlan.priority).filter(
         OneTimeGoalPlan.user_id == user_id,
         OneTimeGoalPlan.is_active == True,
@@ -1085,20 +1169,15 @@ def save_recurring_goal_plan(db, user_id: str, plan: dict):
         max_recurring_priority[0] if max_recurring_priority and max_recurring_priority[0] is not None else 1,
     ) + 1
 
-    plan_json = json.dumps(plan, default=str)
-
-    # Use first occurrence as quick target amount and planning years for dashboard fields.
-    first_occurrence = (plan.get("sip_plan", {}).get("occurrence_plans") or [{}])[0]
-
     plan_record = RecurringGoalPlan(
         user_id=user_id,
         goal_data=plan_json,
-        goal_name=plan.get("goal_name", "Unnamed Goal"),
-        target_amount=first_occurrence.get("cost_at_target", 0.0),
-        future_value=first_occurrence.get("cost_at_target", 0.0),
-        monthly_sip_required=plan.get("sip_plan", {}).get("total_monthly_sip", 0.0),
-        time_horizon_years=int(plan.get("goal_summary", {}).get("total_planning_years", 0)),
-        status=plan.get("status", "unknown"),
+        goal_name=goal_name,
+        target_amount=target_amount,
+        future_value=future_value,
+        monthly_sip_required=monthly_sip_required,
+        time_horizon_years=time_horizon_years,
+        status=status,
         is_active=True,
         priority=next_priority,
     )

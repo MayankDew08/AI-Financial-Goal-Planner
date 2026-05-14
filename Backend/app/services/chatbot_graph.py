@@ -17,6 +17,7 @@ from datetime import datetime
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langsmith import traceable
 
 from app.schemas.chat import (
     Intent,
@@ -153,7 +154,7 @@ def log_audit(event: str, user_id: str, intent: str, payload: dict):
 
 
 # ─── NODE 1: INTENT CLASSIFICATION ──────────────────────────────────────────
-
+@traceable(name="IntentNode")
 def intent_node(state: ChatState) -> ChatState:
     """
     Classify user message into an intent.
@@ -224,7 +225,7 @@ Return JSON with exactly these fields:
 
     return state
 
-
+@traceable(name="route_from_intent")
 def route_from_intent(state: ChatState) -> str:
     """Route based on detected intent"""
     intent = normalize_intent(state["intent"])
@@ -244,6 +245,7 @@ def route_from_intent(state: ChatState) -> str:
     return "slot_node"
 
 
+@traceable(name="route_from_entry")
 def route_from_entry(state: ChatState) -> str:
     """Resume an in-progress conversation or start a new one."""
     if state.get("awaiting_confirmation") or state.get("action_state") == "confirming":
@@ -256,7 +258,7 @@ def route_from_entry(state: ChatState) -> str:
 
 
 # ─── NODE 2: SLOT COLLECTION ───────────────────────────────────────────────
-
+@traceable(name="SlotNode")
 def slot_node(state: ChatState) -> ChatState:
     """
     Collect missing fields one at a time.
@@ -391,13 +393,14 @@ def slot_node(state: ChatState) -> ChatState:
     return state
 
 
+@traceable(name="route_from_slot")
 def route_from_slot(state: ChatState) -> str:
     """Stop after one response; continue on the next user turn."""
     return END
 
 
 # ─── NODE 3: CONFIRMATION GATE ────────────────────────────────────────────
-
+@traceable(name="ConfirmNode")
 def confirm_node(state: ChatState) -> ChatState:
     """
     Ask for explicit confirmation before any write/computation.
@@ -472,7 +475,7 @@ def confirm_node(state: ChatState) -> ChatState:
     state["can_confirm"] = True
     return state
 
-
+@traceable(name="route_from_confirm")
 def route_from_confirm(state: ChatState) -> str:
     """Route based on confirmation"""
     if state.get("confirmed"):
@@ -481,7 +484,7 @@ def route_from_confirm(state: ChatState) -> str:
 
 
 # ─── NODE 4: TOOL INVOCATION ───────────────────────────────────────────────
-
+@traceable(name="ToolNode")
 def tool_node(state: ChatState) -> ChatState:
     """
     Call deterministic math functions.
@@ -712,7 +715,7 @@ def tool_node(state: ChatState) -> ChatState:
 
     return state
 
-
+@traceable(name="route_from_tool")
 def route_from_tool(state: ChatState) -> str:
     """Route based on tool result"""
     if state.get("tool_error"):
@@ -721,7 +724,7 @@ def route_from_tool(state: ChatState) -> str:
 
 
 # ─── NODE 5: EXPLANATION ───────────────────────────────────────────────────
-
+@traceable(name="ExplainNode")
 def explain_node(state: ChatState) -> ChatState:
     """
     Generate AI explanation from computed payload.
@@ -887,6 +890,7 @@ def explain_node(state: ChatState) -> ChatState:
 
 # ─── FALLBACK NODES ────────────────────────────────────────────────────────
 
+@traceable(name="ClarifyNode")
 def clarify_node(state: ChatState) -> ChatState:
     """Ask user to clarify their intent"""
     state["reply"] = """
@@ -905,6 +909,7 @@ What would you like?
     return state
 
 
+@traceable(name="ErrorNode")
 def error_node(state: ChatState) -> ChatState:
     """Handle errors gracefully"""
     error_msg = state.get("tool_error", "Unknown error")
@@ -914,7 +919,7 @@ def error_node(state: ChatState) -> ChatState:
 
 
 # ─── GRAPH ASSEMBLY ────────────────────────────────────────────────────────
-
+@traceable(name="build_graph")
 def build_graph():
     """Build and compile the LangGraph state machine"""
     graph = StateGraph(ChatState)

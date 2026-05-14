@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Form, Depends, HTTPException
-from app.schemas.user import Retirement, ExplainRetirementRequest, ExplainOneTimeGoalRequest
+from app.schemas.user import Retirement, ExplainRetirementRequest, ExplainOneTimeGoalRequest, ExplainRecurringGoalRequest
 from app.schemas.goals import OneTimeGoalRequest, RecurringGoalRequest
 from pydantic import ValidationError
 from app.services.math.goals import get_retirement_plan, explain_retirement_plan_with_ai, save_retirement_plan, one_time_goal, explain_one_time_goal_with_ai, save_one_time_goal_plan, compute_recurring_goal, save_recurring_goal_plan, explain_recurring_goal_with_ai
@@ -14,7 +14,10 @@ from sqlalchemy.orm import Session
 import json
 from datetime import datetime as dt
 from app.utils.log_format import JSONFormatter
+from app.utils.redis_setup import redis as upstash_redis_client
+from app.utils.cache import get_or_set_cache, make_cache_key
 import logging
+from time import perf_counter
 
 handler = logging.StreamHandler()
 handler.setFormatter(JSONFormatter())
@@ -26,7 +29,21 @@ logger.setLevel(logging.INFO)
 
 
 router = APIRouter(prefix="/goals", tags=["goals"])
+redis_client = upstash_redis_client
 
+
+def _probe_cache(namespace: str, payload: dict) -> tuple[str | None, bool]:
+    try:
+        cache_key = make_cache_key(namespace=namespace, payload=payload)
+        return cache_key, redis_client.get(cache_key) is not None
+    except Exception as exc:
+        logger.warning({
+            "event": "cache_probe_failed",
+            "namespace": namespace,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        })
+        return None, False
 
 def _validation_error_detail(exc: ValidationError) -> str:
     errors = exc.errors()
@@ -134,8 +151,24 @@ async def endpoint_retirement(
         db.commit()
         db.refresh(current_user)
     
-    # Calculate retirement plan
-    plan = get_retirement_plan(data)
+    # Calculate retirement plan (cached) while preserving downstream side-effects
+    cache_namespace = "goals:retirement_plan"
+    cache_payload = {"user_id": current_user.id, **data.model_dump(mode="json")}
+    cache_key, cache_present_before = _probe_cache(cache_namespace, cache_payload)
+    plan_start = perf_counter()
+    plan = get_or_set_cache(
+        namespace=cache_namespace,
+        payload=cache_payload,
+        compute_fn=lambda: get_retirement_plan(data),
+    )
+    plan_elapsed_ms = round((perf_counter() - plan_start) * 1000, 2)
+    logger.info({
+        "event": "retirement_plan_cache_result",
+        "user_id": current_user.id,
+        "cache_source": "hit" if cache_present_before else "miss",
+        "cache_key_suffix": cache_key[-12:] if cache_key else None,
+        "plan_phase_time_ms": plan_elapsed_ms,
+    })
     
     # Save plan to database as JSON
     try:
@@ -191,9 +224,13 @@ async def endpoint_retirement(
 @router.post("/explain_retirement_plan")
 def endpoint_explain_retirement_plan(request: ExplainRetirementRequest):
     logger.info({"event": "explain_retirement_plan_request"})
-    explanation = explain_retirement_plan_with_ai(
-        request.retirement_plan,
-        request.user_question
+    explanation = get_or_set_cache(
+        namespace="goals:explain_retirement_plan",
+        payload=request,
+        compute_fn=lambda: explain_retirement_plan_with_ai(
+            request.retirement_plan,
+            request.user_question,
+        ),
     )
     logger.info({"event": "explain_retirement_plan_success"})
     return {
@@ -255,8 +292,18 @@ async def endpoint_one_time_goal(
         risk_tolerance=risk_tolerance
     )
     
-    # Calculate goal plan using user's financial profile
-    plan = one_time_goal(goal_request, current_user)
+    # Calculate goal plan (cached) while preserving downstream side-effects
+    plan = get_or_set_cache(
+        namespace="goals:one_time_plan",
+        payload={
+            "user_id": current_user.id,
+            **goal_request.model_dump(mode="json"),
+            "monthly_income": current_user.current_income,
+            "monthly_expenses": current_user.current_monthly_expenses,
+            "income_raise_pct": current_user.income_raise_pct,
+        },
+        compute_fn=lambda: one_time_goal(goal_request, current_user),
+    )
     
     # Save plan to database
     try:
@@ -306,9 +353,13 @@ async def endpoint_one_time_goal(
 @router.post("/explain_one_time_goal")
 def endpoint_explain_one_time_goal(request: ExplainOneTimeGoalRequest):
     logger.info({"event": "explain_one_time_goal_request"})
-    explanation = explain_one_time_goal_with_ai(
-        request.goal_plan,
-        request.user_question
+    explanation = get_or_set_cache(
+        namespace="goals:explain_one_time_goal",
+        payload=request,
+        compute_fn=lambda: explain_one_time_goal_with_ai(
+            request.goal_plan,
+            request.user_question,
+        ),
     )
     logger.info({"event": "explain_one_time_goal_success"})
     return {
@@ -331,16 +382,10 @@ async def endpoint_recurring_goal(
     db: Session = Depends(get_db),
     ):
     logger.info({
-    "event": "recurring_goal_success",
-    "user_id": current_user.id,
-    "goal_name": goal_name,
-    "plan_status": plan.get("status") if isinstance(plan, dict) else None,
-})
-
-return {
-    "plan": plan,
-    "conflict": conflict_results
-}
+        "event": "recurring_goal_request",
+        "user_id": current_user.id if current_user else None,
+        "goal_name": goal_name,
+    })
 
     # User already fetched from DB by get_current_user dependency
     if not current_user:
@@ -396,7 +441,11 @@ return {
             detail=detail,
         )
     
-    plan = compute_recurring_goal(data)
+    plan = get_or_set_cache(
+        namespace="goals:recurring_plan",
+        payload={"user_id": current_user.id, **data.model_dump(mode="json")},
+        compute_fn=lambda: compute_recurring_goal(data),
+    )
 
     try:
         save_recurring_goal_plan(db, current_user.id, plan)
@@ -439,18 +488,23 @@ return {
         "plan_status": plan.get("status") if isinstance(plan, dict) else None,
     })
 
-# @router.post("/explain_recurring_goal")
-# def endpoint_explain_recurring_goal(request: ExplainRecurringGoalRequest):
-#     logger.info({"event": "explain_recurring_goal_request"})
-#     explanation = explain_recurring_goal_with_ai(
-#         request.goal_plan,
-#         request.user_question
-#     )
-#     logger.info({"event": "explain_recurring_goal_success"})
-#     return {
-#         "explanation": explanation
-#     }
-#     return {"plan": plan, "conflict": conflict_results}
+    return {"plan": plan, "conflict": conflict_results}
+
+@router.post("/explain_recurring_goal")
+def endpoint_explain_recurring_goal(request: ExplainRecurringGoalRequest):
+    logger.info({"event": "explain_recurring_goal_request"})
+    explanation = get_or_set_cache(
+        namespace="goals:explain_recurring_goal",
+        payload=request,
+        compute_fn=lambda: explain_recurring_goal_with_ai(
+            request.goal_plan,
+            request.user_question,
+        ),
+    )
+    logger.info({"event": "explain_recurring_goal_success"})
+    return {
+        "explanation": explanation
+    }
 
 @router.get("/profile_overview")
 async def endpoint_profile_overview(

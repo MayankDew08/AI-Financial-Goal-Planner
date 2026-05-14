@@ -1,8 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field, model_validator, EmailStr
-from typing import Optional, TypedDict, Annotated
-from langchain_core.messages import BaseMessage
-
+from typing import Optional
 
 try:
     from typing import Self

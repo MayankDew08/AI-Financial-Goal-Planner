@@ -50,7 +50,15 @@ async def chat_message(
 
     try:
         # Configure for this session/thread
-        config = {"configurable": {"thread_id": session_id}}
+        config = {
+            "configurable": {"thread_id": session_id},
+            "metadata": {
+                "user_id": str(user_id),
+                "session_id": session_id,
+                "route": "chat.message",
+            },
+            "tags": ["chat", "goalpath-ai"],
+        }
 
         # Input state for this turn. Do not overwrite checkpointed progress.
         input_state = {

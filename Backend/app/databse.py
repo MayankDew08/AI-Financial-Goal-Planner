@@ -1,4 +1,5 @@
 import os
+import socket
 from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv
@@ -32,6 +33,29 @@ def _normalize_database_url(database_url: str) -> str:
     return normalized
 
 
+def _assert_supabase_host_reachable(database_url: str) -> None:
+    parsed_url = make_url(database_url)
+    host = (parsed_url.host or "").lower()
+
+    # Direct Supabase DB hosts often resolve only to IPv6. If the runtime
+    # network has no IPv6 route, startup fails with "Network is unreachable".
+    if not host.startswith("db.") or not host.endswith(".supabase.co"):
+        return
+
+    try:
+        infos = socket.getaddrinfo(host, parsed_url.port or 5432, type=socket.SOCK_STREAM)
+    except OSError:
+        return
+
+    has_ipv4 = any(family == socket.AF_INET for family, *_ in infos)
+    if not has_ipv4:
+        raise RuntimeError(
+            "Supabase direct DB host resolves only to IPv6 from this machine. "
+            "Use the Supabase Transaction Pooler URL (pooler.supabase.com:6543) "
+            "with sslmode=require in SQLALCHEMY_DATABASE_URL."
+        )
+
+
 def _get_database_url() -> str:
     database_url = (
         os.getenv("SQLALCHEMY_DATABASE_URL")
@@ -55,6 +79,7 @@ def _get_database_url() -> str:
         raise RuntimeError("SQLALCHEMY_DATABASE_URL is not set")
 
     database_url = _normalize_database_url(database_url)
+    _assert_supabase_host_reachable(database_url)
 
     # In containers, localhost points to the app container itself, not your DB host.
     if _running_in_container():
