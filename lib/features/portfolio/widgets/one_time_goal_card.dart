@@ -1,23 +1,17 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../screens/goal_details_screen.dart';
 import 'portfolio_helpers.dart';
 import 'glide_path_widget.dart';
 
-class OneTimeGoalCard extends StatefulWidget {
+class OneTimeGoalCard extends StatelessWidget {
   final Map<String, dynamic> data;
   final VoidCallback onDelete;
   const OneTimeGoalCard({super.key, required this.data, required this.onDelete});
 
   @override
-  State<OneTimeGoalCard> createState() => _OneTimeGoalCardState();
-}
-
-class _OneTimeGoalCardState extends State<OneTimeGoalCard> {
-  bool _expanded = false;
-
-  @override
   Widget build(BuildContext context) {
-    final plan = (widget.data['plan'] as Map<String, dynamic>?) ?? widget.data;
+    final plan = (data['plan'] as Map<String, dynamic>?) ?? data;
     final status = (plan['status'] as String? ?? '').toLowerCase();
     final isFeasible = status == 'feasible';
     final statusColor = isFeasible ? AppColors.green : AppColors.error;
@@ -26,7 +20,7 @@ class _OneTimeGoalCardState extends State<OneTimeGoalCard> {
     final sipPlan = plan['sip_plan'] as Map<String, dynamic>? ?? {};
     final goalName = plan['goal_name'] ??
         summary['goal_name'] ??
-        widget.data['goal_name'] ??
+        data['goal_name'] ??
         'GOAL';
 
     final targetAmount = fmtCurrency(summary['target_amount'] ??
@@ -75,7 +69,7 @@ class _OneTimeGoalCardState extends State<OneTimeGoalCard> {
                           color: AppColors.textMuted.withOpacity(0.35))),
                 ])),
             GestureDetector(
-              onTap: widget.onDelete,
+              onTap: onDelete,
               child: Container(
                 padding: const EdgeInsets.all(6),
                 child: Icon(Icons.delete_outline,
@@ -98,38 +92,59 @@ class _OneTimeGoalCardState extends State<OneTimeGoalCard> {
           ]),
         ),
         GestureDetector(
-          onTap: () => setState(() => _expanded = !_expanded),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => GoalDetailsScreen(
+                  title: goalName.toString(),
+                  subtitle: '$yearsToGoal years away',
+                  icon: Icons.flag_outlined,
+                  status: status,
+                  statusColor: statusColor,
+                  previewMetrics: Row(
+                    children: [
+                      MetricMini(label: 'TARGET', value: targetAmount),
+                      const SizedBox(width: 12),
+                      MetricMini(
+                          label: 'MONTHLY SIP',
+                          value: monthlySip,
+                          valueColor: AppColors.green),
+                    ],
+                  ),
+                  detailWidget: OneTimeDetail(plan: plan),
+                ),
+              ),
+            );
+          },
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
+                color: AppColors.green.withOpacity(0.04),
                 border: Border(
-                    top: BorderSide(color: AppColors.green.withOpacity(0.06)))),
+                    top: BorderSide(color: AppColors.green.withOpacity(0.08)))),
             child: Row(children: [
-              Text(_expanded ? 'HIDE DETAILS' : 'VIEW DETAILS',
+              Text('VIEW DETAILS',
                   style: TextStyle(
                       fontFamily: 'Courier',
-                      fontSize: 9,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
                       letterSpacing: 2,
-                      color: AppColors.green.withOpacity(0.5))),
+                      color: AppColors.green.withOpacity(0.8))),
               const Spacer(),
-              Icon(
-                  _expanded
-                      ? Icons.keyboard_arrow_up
-                      : Icons.keyboard_arrow_down,
-                  color: AppColors.green.withOpacity(0.4),
-                  size: 16),
+              Icon(Icons.arrow_forward,
+                  color: AppColors.green.withOpacity(0.6), size: 16),
             ]),
           ),
         ),
-        if (_expanded) _OneTimeDetail(plan: plan),
       ]),
     );
   }
 }
 
-class _OneTimeDetail extends StatelessWidget {
+class OneTimeDetail extends StatelessWidget {
   final Map<String, dynamic> plan;
-  const _OneTimeDetail({required this.plan});
+  const OneTimeDetail({super.key, required this.plan});
 
   @override
   Widget build(BuildContext context) {

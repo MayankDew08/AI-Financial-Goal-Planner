@@ -1,22 +1,16 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../screens/goal_details_screen.dart';
 import 'portfolio_helpers.dart';
 import 'glide_path_widget.dart';
 
-class RetirementCard extends StatefulWidget {
+class RetirementCard extends StatelessWidget {
   final Map<String, dynamic> data;
   const RetirementCard({super.key, required this.data});
 
   @override
-  State<RetirementCard> createState() => _RetirementCardState();
-}
-
-class _RetirementCardState extends State<RetirementCard> {
-  bool _expanded = false;
-
-  @override
   Widget build(BuildContext context) {
-    final plan = (widget.data['plan'] as Map<String, dynamic>?) ?? widget.data;
+    final plan = (data['plan'] as Map<String, dynamic>?) ?? data;
     final status = (plan['status'] as String? ?? '').toLowerCase();
     final isFeasible = status == 'feasible';
     final statusColor = isFeasible ? AppColors.green : AppColors.error;
@@ -86,39 +80,59 @@ class _RetirementCardState extends State<RetirementCard> {
         ),
 
         GestureDetector(
-          onTap: () => setState(() => _expanded = !_expanded),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => GoalDetailsScreen(
+                  title: 'RETIREMENT PLAN',
+                  subtitle: 'Retire at $retirementAge',
+                  icon: Icons.beach_access_outlined,
+                  status: status,
+                  statusColor: statusColor,
+                  previewMetrics: Row(
+                    children: [
+                      MetricMini(label: 'CORPUS NEEDED', value: requiredCorpus),
+                      const SizedBox(width: 12),
+                      MetricMini(
+                          label: isFeasible ? 'MONTHLY SIP' : 'MONTHLY SHORTFALL',
+                          value: isFeasible ? requiredSip : monthlyShortfall,
+                          valueColor: isFeasible ? AppColors.green : AppColors.error),
+                    ],
+                  ),
+                  detailWidget: RetirementDetail(plan: plan),
+                ),
+              ),
+            );
+          },
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
+                color: AppColors.green.withOpacity(0.04),
                 border: Border(
                     top: BorderSide(color: AppColors.green.withOpacity(0.08)))),
             child: Row(children: [
-              Text(_expanded ? 'HIDE DETAILS' : 'VIEW DETAILS',
+              Text('VIEW DETAILS',
                   style: TextStyle(
                       fontFamily: 'Courier',
-                      fontSize: 9,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
                       letterSpacing: 2,
-                      color: AppColors.green.withOpacity(0.5))),
+                      color: AppColors.green.withOpacity(0.8))),
               const Spacer(),
-              Icon(
-                  _expanded
-                      ? Icons.keyboard_arrow_up
-                      : Icons.keyboard_arrow_down,
-                  color: AppColors.green.withOpacity(0.4),
-                  size: 16),
+              Icon(Icons.arrow_forward,
+                  color: AppColors.green.withOpacity(0.6), size: 16),
             ]),
           ),
         ),
-
-        if (_expanded) _RetirementDetail(plan: plan),
       ]),
     );
   }
 }
 
-class _RetirementDetail extends StatelessWidget {
+class RetirementDetail extends StatelessWidget {
   final Map<String, dynamic> plan;
-  const _RetirementDetail({required this.plan});
+  const RetirementDetail({super.key, required this.plan});
 
   @override
   Widget build(BuildContext context) {

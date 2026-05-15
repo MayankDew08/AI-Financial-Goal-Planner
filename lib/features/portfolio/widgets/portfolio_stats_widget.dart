@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../../core/theme/app_theme.dart';
 
-class PortfolioStatsWidget extends StatelessWidget {
+class PortfolioStatsWidget extends StatefulWidget {
   final UserProfile user;
   final Map<String, dynamic>? retirement;
   final List oneTimeGoals;
@@ -20,18 +20,25 @@ class PortfolioStatsWidget extends StatelessWidget {
     required this.conflict,
   });
 
+  @override
+  State<PortfolioStatsWidget> createState() => _PortfolioStatsWidgetState();
+}
+
+class _PortfolioStatsWidgetState extends State<PortfolioStatsWidget> {
+  int _pieTouchedIndex = -1;
+
   List<_GoalStats> _aggregateGoals() {
     final goals = <_GoalStats>[];
 
-    if (retirement != null) {
+    if (widget.retirement != null) {
       goals.add(_GoalStats.fromGoalMap(
-        retirement!,
+        widget.retirement!,
         defaultName: "RETIREMENT",
         icon: Icons.beach_access_outlined,
       ));
     }
 
-    for (var g in oneTimeGoals) {
+    for (var g in widget.oneTimeGoals) {
       goals.add(_GoalStats.fromGoalMap(
         g,
         defaultName: "ONE TIME GOAL",
@@ -39,7 +46,7 @@ class PortfolioStatsWidget extends StatelessWidget {
       ));
     }
 
-    for (var g in recurringGoals) {
+    for (var g in widget.recurringGoals) {
       goals.add(_GoalStats.fromGoalMap(
         g,
         defaultName: "RECURRING GOAL",
@@ -58,9 +65,9 @@ class PortfolioStatsWidget extends StatelessWidget {
 
     final totalCorpus = goals.fold<double>(0, (sum, g) => sum + g.targetCorpus);
 
-    final monthlyIncome = user.currentIncome / 12;
+    final monthlyIncome = widget.user.currentIncome / 12;
 
-    final expenses = user.monthlyExpenses;
+    final expenses = widget.user.monthlyExpenses;
 
     final savings =
         (monthlyIncome - totalSip - expenses).clamp(0, double.infinity);
@@ -148,27 +155,47 @@ class PortfolioStatsWidget extends StatelessWidget {
             height: 250,
             child: PieChart(
               PieChartData(
+                pieTouchData: PieTouchData(
+                  touchCallback: (FlTouchEvent event, pieTouchResponse) {
+                    setState(() {
+                      if (!event.isInterestedForInteractions ||
+                          pieTouchResponse == null ||
+                          pieTouchResponse.touchedSection == null) {
+                        _pieTouchedIndex = -1;
+                        return;
+                      }
+                      _pieTouchedIndex =
+                          pieTouchResponse.touchedSection!.touchedSectionIndex;
+                    });
+                  },
+                ),
                 centerSpaceRadius: 45,
                 sectionsSpace: 3,
                 sections: [
-                  PieChartSectionData(
-                    value: totalSip,
-                    color: AppColors.green,
-                    title: "SIP",
-                    radius: 70,
-                  ),
-                  PieChartSectionData(
-                    value: expenses,
-                    color: Colors.redAccent,
-                    title: "EXP",
-                    radius: 70,
-                  ),
-                  PieChartSectionData(
-                    value: savings.toDouble(),
-                    color: Colors.blueGrey,
-                    title: "SAVE",
-                    radius: 70,
-                  ),
+                  if (monthlyIncome > 0)
+                    PieChartSectionData(
+                      value: totalSip,
+                      color: AppColors.green,
+                      title: "SIP\n${((totalSip / monthlyIncome) * 100).toStringAsFixed(0)}%",
+                      radius: _pieTouchedIndex == 0 ? 80 : 70,
+                      titleStyle: AppText.label(size: _pieTouchedIndex == 0 ? 14 : 12, color: AppColors.blackMid),
+                    ),
+                  if (monthlyIncome > 0)
+                    PieChartSectionData(
+                      value: expenses,
+                      color: Colors.redAccent,
+                      title: "EXP\n${((expenses / monthlyIncome) * 100).toStringAsFixed(0)}%",
+                      radius: _pieTouchedIndex == 1 ? 80 : 70,
+                      titleStyle: AppText.label(size: _pieTouchedIndex == 1 ? 14 : 12, color: Colors.white),
+                    ),
+                  if (monthlyIncome > 0)
+                    PieChartSectionData(
+                      value: savings.toDouble(),
+                      color: Colors.blueGrey,
+                      title: "SAVE\n${((savings / monthlyIncome) * 100).toStringAsFixed(0)}%",
+                      radius: _pieTouchedIndex == 2 ? 80 : 70,
+                      titleStyle: AppText.label(size: _pieTouchedIndex == 2 ? 14 : 12, color: Colors.white),
+                    ),
                 ],
               ),
             ),
@@ -191,9 +218,72 @@ class PortfolioStatsWidget extends StatelessWidget {
             height: 250,
             child: BarChart(
               BarChartData(
+                barTouchData: BarTouchData(
+                  touchTooltipData: BarTouchTooltipData(
+                    tooltipBgColor: AppColors.blackCard.withOpacity(0.9),
+                    tooltipBorder: BorderSide(color: AppColors.green.withOpacity(0.5)),
+                    getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                      return BarTooltipItem(
+                        "${goals[groupIndex].name}\n",
+                        AppText.label(color: AppColors.textMuted),
+                        children: [
+                          TextSpan(
+                            text: _fmt(rod.toY),
+                            style: AppText.data(size: 16),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
                 borderData: FlBorderData(show: false),
-                gridData: FlGridData(show: false),
-                titlesData: FlTitlesData(show: false),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  getDrawingHorizontalLine: (value) {
+                    return FlLine(
+                      color: AppColors.green.withOpacity(0.05),
+                      strokeWidth: 1,
+                    );
+                  },
+                ),
+                titlesData: FlTitlesData(
+                  show: true,
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (double value, TitleMeta meta) {
+                        if (value.toInt() >= goals.length) return const SizedBox();
+                        final name = goals[value.toInt()].name;
+                        final abbrev = name.length > 5 ? name.substring(0, 5) : name;
+                        return SideTitleWidget(
+                          axisSide: meta.axisSide,
+                          child: Text(
+                            abbrev,
+                            style: AppText.label(size: 10),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 45,
+                      getTitlesWidget: (value, meta) {
+                        return SideTitleWidget(
+                          axisSide: meta.axisSide,
+                          child: Text(
+                            _fmt(value),
+                            style: AppText.label(size: 10),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
                 barGroups: goals.asMap().entries.map((entry) {
                   int index = entry.key;
                   final goal = entry.value;
@@ -203,11 +293,20 @@ class PortfolioStatsWidget extends StatelessWidget {
                     barRods: [
                       BarChartRodData(
                         toY: goal.monthlySip,
-                        width: 18,
-                        color: goal.isFeasible
-                            ? AppColors.green
-                            : Colors.redAccent,
-                        borderRadius: BorderRadius.circular(6),
+                        width: 22,
+                        gradient: LinearGradient(
+                          colors: goal.isFeasible
+                              ? [AppColors.greenDim.withOpacity(0.6), AppColors.green]
+                              : [Colors.red.withOpacity(0.6), Colors.redAccent],
+                          begin: Alignment.bottomCenter,
+                          end: Alignment.topCenter,
+                        ),
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                        backDrawRodData: BackgroundBarChartRodData(
+                          show: true,
+                          toY: goals.isEmpty ? 0 : goals.map((e) => e.monthlySip).reduce((a, b) => a > b ? a : b) * 1.1,
+                          color: AppColors.green.withOpacity(0.05),
+                        ),
                       ),
                     ],
                   );
@@ -233,21 +332,98 @@ class PortfolioStatsWidget extends StatelessWidget {
             height: 250,
             child: LineChart(
               LineChartData(
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    tooltipBgColor: AppColors.blackCard.withOpacity(0.9),
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((spot) {
+                        return LineTooltipItem(
+                          _fmt(spot.y),
+                          AppText.data(size: 14),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
                 borderData: FlBorderData(show: false),
-                gridData: FlGridData(show: true),
-                titlesData: FlTitlesData(show: false),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  getDrawingHorizontalLine: (value) {
+                    return FlLine(
+                      color: AppColors.green.withOpacity(0.05),
+                      strokeWidth: 1,
+                      dashArray: [5, 5],
+                    );
+                  },
+                ),
+                titlesData: FlTitlesData(
+                  show: true,
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (double value, TitleMeta meta) {
+                        return SideTitleWidget(
+                          axisSide: meta.axisSide,
+                          child: Text(
+                            "Yr ${value.toInt()}",
+                            style: AppText.label(size: 10),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 55,
+                      getTitlesWidget: (value, meta) {
+                        return SideTitleWidget(
+                          axisSide: meta.axisSide,
+                          child: Text(
+                            _fmt(value),
+                            style: AppText.label(size: 10),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
                 lineBarsData: [
                   LineChartBarData(
                     isCurved: true,
                     color: AppColors.green,
-                    barWidth: 4,
-                    dotData: FlDotData(show: true),
+                    barWidth: 3,
+                    isStrokeCapRound: true,
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) =>
+                          FlDotCirclePainter(
+                        radius: 4,
+                        color: AppColors.blackCard,
+                        strokeWidth: 2,
+                        strokeColor: AppColors.green,
+                      ),
+                    ),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      gradient: LinearGradient(
+                        colors: [
+                          AppColors.green.withOpacity(0.3),
+                          AppColors.green.withOpacity(0.0),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
                     spots: List.generate(5, (index) {
                       final year = index + 1;
 
                       final projected = totalSip *
                           powValue(
-                            (1 + user.incomeRaisePct / 100),
+                            (1 + widget.user.incomeRaisePct / 100),
                             year,
                           );
 
@@ -275,7 +451,7 @@ class PortfolioStatsWidget extends StatelessWidget {
               ),
             ),
             child: Text(
-              "Conflict Status: ${conflict['overall_status'] ?? 'N/A'}",
+              "Conflict Status: ${widget.conflict['overall_status'] ?? 'N/A'}",
               style: TextStyle(
                 color: AppColors.textMuted,
                 fontFamily: 'Courier',

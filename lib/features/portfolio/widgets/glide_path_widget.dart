@@ -87,6 +87,10 @@ class _GlidePathWidgetState extends State<GlidePathWidget>
           if (decoded is List) return _fromList(decoded);
         } catch (_) {}
       }
+      
+      // Shape: backend dict containing 'yearly_allocation_table' or 'yearly_schedule'
+      if (m['yearly_allocation_table'] is List) return _fromList(m['yearly_allocation_table'] as List);
+      if (m['yearly_schedule'] is List) return _fromList(m['yearly_schedule'] as List);
 
       // Shape: {30: {equity:80, debt:20}, 31: ...}  (age-keyed map)
       final rows = <GlideRow>[];
@@ -470,10 +474,9 @@ class _LegendDot extends StatelessWidget {
         Container(
             width: 14,
             height: 3,
-            color: dashed ? Colors.transparent : color,
             decoration: dashed
                 ? BoxDecoration(border: Border.all(color: color, width: 1))
-                : null),
+                : BoxDecoration(color: color)),
         const SizedBox(width: 6),
         Text(label,
             style: TextStyle(

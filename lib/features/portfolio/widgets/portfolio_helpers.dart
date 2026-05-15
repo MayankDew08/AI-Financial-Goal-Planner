@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
-import 'glide_path_widget.dart';
 
 // Shared small widgets
 
@@ -205,53 +204,96 @@ class DetailSection extends StatelessWidget {
 
     if (rows.isEmpty) return const SizedBox();
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-        child: Text(title,
-            style: TextStyle(
-                fontFamily: 'Courier',
-                fontSize: 8,
-                letterSpacing: 3,
-                color: AppColors.green.withOpacity(0.45))),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.blackMid,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.green.withOpacity(0.12), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
-      ...rows.asMap().entries.map((e) {
-        final isLast = e.key == rows.length - 1;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Premium Header
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
           decoration: BoxDecoration(
+            color: AppColors.green.withOpacity(0.06),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+            ),
             border: Border(
-              top: BorderSide(color: AppColors.green.withOpacity(0.05)),
-              bottom: isLast
-                  ? BorderSide.none
-                  : BorderSide(color: AppColors.green.withOpacity(0.05)),
+              bottom: BorderSide(color: AppColors.green.withOpacity(0.1)),
             ),
           ),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Expanded(
-                flex: 2,
-                child: Text(label(e.value.key),
-                    style: TextStyle(
-                        fontFamily: 'Courier',
-                        fontSize: 9,
-                        letterSpacing: 1,
-                        color: AppColors.textMuted.withOpacity(0.35)))),
-            const SizedBox(width: 8),
-            Expanded(
-                flex: 3,
-                child: Text(fmt(e.value.key, e.value.value),
-                    textAlign: TextAlign.right,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontFamily: 'Courier',
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textMuted.withOpacity(0.75)))),
-          ]),
-        );
-      }),
-    ]);
+          child: Row(
+            children: [
+              Icon(Icons.insights_rounded, size: 16, color: AppColors.green),
+              const SizedBox(width: 10),
+              Text(title.toUpperCase(),
+                  style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 2,
+                      color: AppColors.green)),
+            ],
+          ),
+        ),
+        // Rows
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(
+            children: rows.asMap().entries.map((e) {
+              final isLast = e.key == rows.length - 1;
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                decoration: BoxDecoration(
+                  border: isLast ? null : Border(
+                    bottom: BorderSide(color: AppColors.textMuted.withOpacity(0.08)),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      flex: 5,
+                      child: Text(label(e.value.key),
+                          style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.3,
+                              color: AppColors.textMuted.withOpacity(0.9))),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 4,
+                      child: Text(fmt(e.value.key, e.value.value),
+                          textAlign: TextAlign.right,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white)),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ]),
+    );
   }
 }
 
@@ -354,30 +396,53 @@ class AllocationBar extends StatelessWidget {
     final eqI = equity.round().clamp(1, 99);
     final dtI = (100 - eqI).clamp(1, 99);
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.blackMid,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.green.withOpacity(0.12)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('ALLOCATION',
-            style: TextStyle(
-                fontFamily: 'Courier',
-                fontSize: 8,
-                letterSpacing: 3,
-                color: AppColors.green.withOpacity(0.45))),
-        const SizedBox(height: 10),
-        Row(children: [
-          Expanded(
-              flex: eqI, child: Container(height: 8, color: AppColors.green)),
-          Expanded(
-              flex: dtI,
-              child: Container(
-                  height: 8, color: AppColors.textMuted.withOpacity(0.18))),
-        ]),
-        const SizedBox(height: 8),
+        Row(
+          children: [
+            Icon(Icons.pie_chart_rounded, size: 16, color: AppColors.green),
+            const SizedBox(width: 10),
+            Text('ALLOCATION',
+                style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 2,
+                    color: AppColors.green)),
+          ],
+        ),
+        const SizedBox(height: 20),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Row(children: [
+            Expanded(
+                flex: eqI, child: Container(height: 14, color: AppColors.green)),
+            Expanded(
+                flex: dtI,
+                child: Container(
+                    height: 14, color: AppColors.textMuted.withOpacity(0.2))),
+          ]),
+        ),
+        const SizedBox(height: 20),
         Row(children: [
           AllocLeg(color: AppColors.green, label: 'EQUITY', pct: eqI),
-          const SizedBox(width: 20),
+          const SizedBox(width: 24),
           AllocLeg(
-              color: AppColors.textMuted.withOpacity(0.5),
+              color: AppColors.textMuted.withOpacity(0.7),
               label: 'DEBT',
               pct: dtI),
         ]),
@@ -394,13 +459,25 @@ class AllocLeg extends StatelessWidget {
       {super.key, required this.color, required this.label, required this.pct});
   @override
   Widget build(BuildContext context) => Row(children: [
-        Container(width: 8, height: 8, color: color),
-        const SizedBox(width: 6),
-        Text('$label  $pct%',
+        Container(
+          width: 12, 
+          height: 12, 
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle)
+        ),
+        const SizedBox(width: 10),
+        Text('$label',
             style: TextStyle(
-                fontFamily: 'Courier',
-                fontSize: 9,
-                color: AppColors.textMuted.withOpacity(0.5))),
+                fontFamily: 'Inter',
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textMuted.withOpacity(0.9))),
+        const SizedBox(width: 6),
+        Text('$pct%',
+            style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                color: Colors.white)),
       ]);
 }
 

@@ -70,7 +70,9 @@ bool isPrimaryKey(String key, dynamic value) {
       lk.contains('raise') ||
       lk.contains('input') ||
       lk == 'years' ||
-      lk == 'age') return false;
+      lk == 'age') {
+    return false;
+  }
   if (lk.contains('sip') ||
       lk.contains('corpus') ||
       lk.contains('required') ||
@@ -84,6 +86,8 @@ bool isPrimaryKey(String key, dynamic value) {
       lk.contains('saving') ||
       lk.contains('result') ||
       lk.contains('amount') ||
-      lk.contains('fund')) return true;
+      lk.contains('fund')) {
+    return true;
+  }
   return n.abs() >= 1000;
 }

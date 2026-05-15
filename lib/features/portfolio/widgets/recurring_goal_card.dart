@@ -1,22 +1,16 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../screens/goal_details_screen.dart';
 import 'portfolio_helpers.dart';
 
-class RecurringGoalCard extends StatefulWidget {
+class RecurringGoalCard extends StatelessWidget {
   final Map<String, dynamic> data;
   final VoidCallback onDelete;
   const RecurringGoalCard({super.key, required this.data, required this.onDelete});
 
   @override
-  State<RecurringGoalCard> createState() => _RecurringGoalCardState();
-}
-
-class _RecurringGoalCardState extends State<RecurringGoalCard> {
-  bool _expanded = false;
-
-  @override
   Widget build(BuildContext context) {
-    final plan = (widget.data['plan'] as Map<String, dynamic>?) ?? widget.data;
+    final plan = (data['plan'] as Map<String, dynamic>?) ?? data;
     final status = (plan['status'] as String? ?? '').toLowerCase();
     final isFeasible = status == 'feasible';
     final statusColor = isFeasible ? AppColors.green : AppColors.error;
@@ -25,7 +19,7 @@ class _RecurringGoalCardState extends State<RecurringGoalCard> {
     final sipPlan = plan['sip_plan'] as Map<String, dynamic>? ?? {};
     final goalName = plan['goal_name'] ??
         summary['goal_name'] ??
-        widget.data['goal_name'] ??
+        data['goal_name'] ??
         'RECURRING GOAL';
 
     final totalSip =
@@ -70,7 +64,7 @@ class _RecurringGoalCardState extends State<RecurringGoalCard> {
                           color: AppColors.textMuted.withOpacity(0.35))),
                 ])),
             GestureDetector(
-              onTap: widget.onDelete,
+              onTap: onDelete,
               child: Container(
                 padding: const EdgeInsets.all(6),
                 child: Icon(Icons.delete_outline,
@@ -89,38 +83,53 @@ class _RecurringGoalCardState extends State<RecurringGoalCard> {
               valueColor: AppColors.green),
         ),
         GestureDetector(
-          onTap: () => setState(() => _expanded = !_expanded),
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => GoalDetailsScreen(
+                  title: goalName.toString(),
+                  subtitle: '$occurrences occurrences',
+                  icon: Icons.repeat_rounded,
+                  status: status,
+                  statusColor: statusColor,
+                  previewMetrics: MetricMini(
+                      label: 'TOTAL MONTHLY SIP',
+                      value: totalSip,
+                      valueColor: AppColors.green),
+                  detailWidget: RecurringDetail(plan: plan),
+                ),
+              ),
+            );
+          },
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
+                color: AppColors.green.withOpacity(0.04),
                 border: Border(
-                    top: BorderSide(color: AppColors.green.withOpacity(0.06)))),
+                    top: BorderSide(color: AppColors.green.withOpacity(0.08)))),
             child: Row(children: [
-              Text(_expanded ? 'HIDE DETAILS' : 'VIEW DETAILS',
+              Text('VIEW DETAILS',
                   style: TextStyle(
                       fontFamily: 'Courier',
-                      fontSize: 9,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
                       letterSpacing: 2,
-                      color: AppColors.green.withOpacity(0.5))),
+                      color: AppColors.green.withOpacity(0.8))),
               const Spacer(),
-              Icon(
-                  _expanded
-                      ? Icons.keyboard_arrow_up
-                      : Icons.keyboard_arrow_down,
-                  color: AppColors.green.withOpacity(0.4),
-                  size: 16),
+              Icon(Icons.arrow_forward,
+                  color: AppColors.green.withOpacity(0.6), size: 16),
             ]),
           ),
         ),
-        if (_expanded) _RecurringDetail(plan: plan),
       ]),
     );
   }
 }
 
-class _RecurringDetail extends StatelessWidget {
+class RecurringDetail extends StatelessWidget {
   final Map<String, dynamic> plan;
-  const _RecurringDetail({required this.plan});
+  const RecurringDetail({super.key, required this.plan});
 
   @override
   Widget build(BuildContext context) {
